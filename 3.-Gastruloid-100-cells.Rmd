@@ -1,0 +1,1627 @@
+---
+title: "3. Gastruloid 100 cells"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+```{r include=FALSE}
+packages <- c(
+  ##Data manipulation and analytics
+  "magrittr","dplyr","knitr","tidyverse","scales",
+  "scp","scater","scran","sva","SC3",
+  #Visualization
+  "RColorBrewer","dendsort","cowplot", "ggplot2","ComplexHeatmap","circlize",
+  #Downstream analysis
+  "enrichplot","ggupset","clusterProfiler",
+  #Mouse database
+  "org.Mm.eg.db")
+  
+lapply(packages, require, character.only = TRUE)
+```
+
+Workflow of SCP taken by the authors:  
+<center>
+![SCP workflow](./SCP workflow.png)
+</center>
+
+Vanderaa, C. & Gatto, L. Utilizing Scp for the analysis and replication of single-cell proteomics data. http://biorxiv.org/lookup/doi/10.1101/2021.04.12.439408 (2021) doi:10.1101/2021.04.12.439408.
+
+# I. DATA PROCESSING  
+
+## Input  
+
+Process MQ files from a MQ run
+
+Input four rawdata files in a MaxQuant Run:
+```{r}
+#Input data
+gas.100 <- read.delim("Gas.100Data/2&3. evidence - 100 cells - 0386 + 0370.txt")
+#Design of the experiment
+expdeg <- "100 Cells"
+```
+
+Data cleaning:
+Keep only one identifier that have the best scoring protein.
+```{r}
+#Remove >2nd leading proteins
+gas.100$Leading.razor.protein <- sub(';.*','',gas.100$Leading.razor.protein)
+#Remove >2nd leading genes
+gas.100$Gene.names <- sub(';.*','',gas.100$Gene.names)
+```
+
+Annotation table: this table was created manually based on experimental design. 
+```{r}
+sampleAnnotation <- read.csv("Gas.100Data/2&3. sampleAnnotation - Gas_100.csv")
+```
+
+```{r message=FALSE, include = FALSE}
+#Create colour set:
+#For heatmap
+colour.hm <-  c(brewer.pal(9,'Blues')[9:3],brewer.pal(9,'Reds')[3:9])
+#For Channels
+colour.Chan <- c("dodgerblue","#E03E3E","#53BB79","#EF8228","#937264","#3043A2","#C25D7B")
+#For Datasets
+colour.100 <- c("#D88C4C","#E49D41","#FEB447","#06CDE0","#1498BE")
+```
+
+## I.1. PSM level  
+
+### 1. Reconstructing the dataset to create SCP/QFeatures object  
+
+In this study, all the experiments were labelled with TMT16-plex. The data are processed with `SCP` package.
+
+```{r message=FALSE}
+scp <- readSCP(featureData = gas.100,
+               colData = sampleAnnotation,
+               channelCol = "Channel",
+               batchCol = "Experiment")
+```
+
+```{r include = FALSE}
+#Number of assays
+l <- length(scp)
+```
+
+There are `r l` assays in this analysis. 
+
+### 2. Quality control at PSM level  
+
+#### 2.1. Cleaning missing data  
+
+The zeros can be biological zeros or technical zeros. Therefore, any zero should be replaced by NA to avoid artefacts in downstream analysis.
+
+```{r}
+scp <- zeroIsNA(scp, i = names(scp))
+scp <- zeroIsNA(scp, i = 1:l)
+```
+  
+#### 2.2. Filter out failed runs based on PSM content (detected features)  
+
+If a dataset contained less than a specific number of features, something wrong was expected to be happened. Therefore, only the assays with sufficient PSMs were kept (e.g. > 500 PSMs)
+
+```{r include=FALSE}
+nPSM <- dims(scp)[1,]
+#Create data frame
+nPSM <- data.frame(Datasets = names(nPSM),
+                       Count = nPSM)
+nPSM$Datasets <- factor(nPSM$Datasets, levels = nPSM$Datasets)
+#Plot
+nPSMplot <- ggplot(data=nPSM, aes(x=Datasets, y=Count, fill=Datasets)) +
+  scale_fill_manual(values= colour.100, 
+                    labels= nPSM$Datasets) +
+  geom_bar(stat="identity")+
+  geom_text(aes(label=Count), position=position_dodge(width=0.9), vjust=-0.25)+
+  ylim(0,6000)+
+  xlab("Datasets") + 
+  ylab("Number of detected PSM") + 
+  theme_minimal()+
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.x =  element_blank())
+```
+
+```{r echo=FALSE, fig.cap="Figure 1. Number of detected PSMs per dataset"}
+nPSMplot
+```
+
+In this experiment, the number of PSMs/assay were sufficient for further analysis. Therefore, no sample was removed.  
+
+```{r include=FALSE}
+#Select the assays that have ️sufficient PSMs (the number of rows is greater than 500),
+keepAssay <- dims(scp)[1, ] > 500
+scp <- scp[, , keepAssay]
+
+```
+  
+#### 2.3. Filter PSMs for contaminants and noisy spectra  
+
+The PSMs matched with the decoy database (Reverse = "+"), contaminant (Potential.contaminant = "+") and PIF < 0.8 were filtered out.  
+Filtering features based on feature metadata  
+- Remove PSMs that were matched to contaminants  
+- Remove PSMs that were matched to the decoy database (reverse)  
+- Keep PSMs that exhibited a high PIF (parental ion fraction), indicative of the purity of a spectrum  
+
+```{r}
+scp <- filterFeatures(scp,
+                      ~ Reverse != "+" &
+                        Potential.contaminant != "+" &
+                        !is.na(PIF) & PIF > 0.8)
+```
+
+#### 2.4. Filter features to control for high false discovery rate FDR  
+
+
+The q-values were computed based on posterior error probabilities (PEP) from MaxQuant across assays. Only those proteins with q-values < 0.01 (1%) were kept.
+
+```{r include=FALSE}
+#or compute q-values at peptide or protein level rather than PSM
+scp <- pep2qvalue(scp,
+                  i = names(scp),
+                  PEP = "PEP",
+                  rowDataName = "qvalue_PSMs")
+```
+```{r}
+scp <- pep2qvalue(scp,
+                  i = names(scp),
+                  PEP = "PEP",
+                  groupBy = "Leading.proteins",
+                  rowDataName = "qvalue_proteins")
+```
+
+```{r include=FALSE}
+#Plot 
+qvalueplot <- rowDataToDF(scp,
+            i = names(scp),
+            vars = c("qvalue_PSMs", "qvalue_proteins")) %>%
+  data.frame %>%
+  pivot_longer(cols = c("qvalue_PSMs", "qvalue_proteins"),
+               names_to = "measure") %>%
+  ggplot(aes(x = value)) +
+  geom_histogram() +
+  geom_vline(xintercept = 0.01) +
+  scale_x_log10() +
+  facet_grid(rows = vars(measure)) +
+  theme_bw()
+
+```
+
+```{r, echo = FALSE, fig.width=7.2, fig.height=4.45, fig.cap="Figure 2. q-value plot for checking PEP."}
+qvalueplot
+```
+
+Filtering out those protein with FDR at 1%.
+
+```{r}
+scp <- filterFeatures(scp,
+                      ~ qvalue_proteins < 0.01)
+
+```
+
+```{r eval=FALSE, echo=FALSE}
+#or for filtering both
+scp <- filterFeatures(scp,
+                      ~ qvalue_psm < 0.01 & qvalue_protein < 0.01)
+
+```
+  
+### 3. Filter out PSMs with high sample to carrier ratio (for single-cell)  
+
+
+This experiment was performs on 100 cells, so there is no filtering features based on SCP metrics (single-cells metrics on Carrier and Reference channels)
+
+The number of channels per cell population (100 cells per channel)  
+
+#### Number channels per pell population  
+
+```{r echo=FALSE}
+poputable <- t(as.data.frame(table(colData(scp)[, "Population"])))
+colnames(poputable) <- poputable[1,]
+poputable <- poputable[-1, ]
+poputable <- t(as.data.frame(poputable))
+rownames(poputable) <- c("Channels")
+knitr::kable(poputable)
+```
+
+## I.2. Peptide level  
+
+
+### 4. Aggregate PSM data to peptide data  
+
+Aggregate PSM data to peptide data. Several PSMs were aggregated into a unique peptide.
+Following the `scp`, PSM data were aggregated using the median value per sample by performing `matrixStats:colMedians` function.
+
+```{r include=FALSE}
+pepAssays <- paste0("Peptides_", names(scp))
+```
+
+```{r message=FALSE}
+scp <- aggregateFeaturesOverAssays(scp,
+                                   i = names(scp),
+                                   fcol = "Sequence",
+                                   name = pepAssays,
+                                   fun = matrixStats::colMedians, na.rm = TRUE)
+```
+
+```{r eval=FALSE, echo=FALSE}
+scp <- infIsNA(scp, i = pepAssays)
+scp <- zeroIsNA(scp, i = pepAssays)
+```
+  
+### 5. Join all datasets into one assay  
+
+Up to now, all the data belonging to each MS run were separated into different assays. In this step, all datasets from different batches were combined into a single assay using
+`joinAssays` function. 
+
+```{r}
+scp <- joinAssays(scp,
+                  i = pepAssays,
+                  name = "Peptides")
+```
+
+### 6. Quality control  
+
+#### 6.1. Median Relative Reporter Intensity  
+
+We computed the median relative reporter ion intensity for each cell separately and applied a filter based on this statistic. This procedure recalls that of library size filtering commonly performed in scRNA-Seq data analysis, where the library size is the sum of the counts in each single cell. Median intensity will be stored in the `colData`. 
+
+
+```{r include=FALSE}
+MedianRI <- apply(assay(scp,"Peptides"),
+                  MARGIN = 2, 
+                  FUN = median, 
+                  na.rm = TRUE)
+#Median Relative Reporter Intensity will be stored in the colData. 
+colData(scp)[names(MedianRI), "MedianRI"] <- MedianRI
+```
+
+For evaluating the background noise of 100-cell experiments, the median relative reporter ion (RI) intensities of each 100-cell channel were estimated and compared to that of empty channels. As empty channels contained no cells, their RI intensities were used for assessing the background noise. 
+
+```{r include=FALSE}
+#Make Population as factor for plotting
+scp$Population <- factor(scp$Population,
+                         levels = c("Mt1-BFP+","Sox17-RFP+","Bra-GFP+","Triple-Neg","Empty"))
+#Plot
+MedianRIplot <- scp %>% colData %>% data.frame %>%
+  ggplot(aes(x = Population, y = MedianRI, fill = Population)) +
+  #geom_boxplot(width=0.5) +
+  geom_violin(adjust=0.75) + geom_boxplot(width=.025) +
+  stat_summary(fun=mean, geom="point", fill="#D92721", shape=21, size=1)+
+  scale_fill_manual(values = colour.Chan)+
+  geom_jitter(aes(colour = Dataset),
+              alpha = 0.9, shape=16, size = 2,
+              position = position_jitter(width = 0.15, height = 0.001))+
+  scale_colour_manual(values = colour.100) +
+  scale_y_log10(breaks = trans_breaks("log10", function(x) {10^x}),
+                labels = trans_format("log10", math_format(10^.x)),
+                limit = c(10^2, 10^6))+
+  #geom_hline(yintercept = ts, linetype='dashed', col = 'red') +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(),
+        axis.title.x = element_blank())+
+  ggtitle(paste0(expdeg," - MedianRI of Peptide Intensity"))
+```
+
+```{r, echo = FALSE, fig.width=7.2, fig.height=4.45, fig.cap="Figure 3. Violin plot showing the distributions of median reporter ion intensities for each cell population."}
+MedianRIplot
+```
+
+The result on the distribution of reporter ion intensities revealed that most of the mean RI intensities of 100-cell channels were higher than those of empty channels. One channel of the Sox17-RFP+ population and one of the Triple-Neg population contained a lower signal than the empty channel, indicating an error possibly caused by sample preparation. These samples were thus filtered out. This result suggests that the intensity signals measured from 100-cell samples exceeded the background noise.
+
+
+#### 6.2. Median Coefficient of Variation  
+
+The coefficients of variation (CV), or standard deviation/mean, are computed on all peptides stemming from the same protein; thus, the CV reveals the consistency of protein quantification for all experimental samples. In particular, within a sample, the quantity of all digested peptides originating from the same protein should correlate with the quantity of that protein. Nonetheless, since empty channels contained no cells, their signals (RI intensities) of digested peptides did not originate from an actual protein. Thus, CV values from empty channels should be highly variable and can be used for evaluating background noise and co-isolation issue. Channels containing cells should have lower quantification variability than empty channels. High median CVs from channels containing cells that did not pass the cutoff value (based on empty channels) were removed. 
+
+In this analysis: `SCoPE2` normalization was used. `SCoPE2` performs a custom normalization (norm = "SCoPE2"). Each row in an assay is normalized by a scaling factor. This scaling factor is the row mean after dividing the columns by the median. The authors retained CVs that are computed using at least 6 peptides (`nobs = 6`). 
+  
+There are some options for normalization: `"sum"`, `"max"`, `"center.mean"`, `"center.median"`, `"div.mean"`, `"div.median"`, `"diff.meda"`, `"quantiles"`, `"quantiles.robust"`,`"vsn"`. 
+
+```{r, message=FALSE}
+scp <- medianCVperCell(scp,
+                       i = pepAssays, #or (l+1):(l*2)
+                       groupBy = "Leading.razor.protein",
+                       nobs = 6, 
+                       norm = "SCoPE2",
+                       colDataName = "MedianCV")
+```
+
+```{r include=FALSE, message=FALSE}
+
+#Threshold for minimum of MedianCV for Empty Channel
+ts <- min(scp$MedianCV[scp$Population=="Empty"],na.rm = TRUE) - 0.001 # - 0.001 for drawinga line below the minium value
+
+#Plot
+MedianCVplot <- scp %>% getWithColData("Peptides") %>% colData %>% data.frame %>%
+  ggplot(aes(x = Population, y = MedianCV, fill = Population)) +
+  geom_boxplot(width=0.4,outlier.shape = NA) +
+  stat_summary(fun=mean, geom="point", fill="#D92721", shape=21, size=1)+
+  scale_fill_manual(values = colour.Chan) +
+  geom_jitter(aes(colour = Dataset),
+              alpha = 0.9, shape=16, size = 2,
+              position = position_jitter(width = 0.15, height = 0.001))+
+  scale_colour_manual(values = colour.100)+
+  #labs(colour = "Datasets")+
+  ylim(0,1) +
+  geom_hline(yintercept = ts, linetype='dashed', col = 'red') +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(),
+        axis.title.x = element_blank())+
+  ggtitle(paste0(expdeg," - MedianCV of Peptide Intensity"))
+
+```
+
+```{r, echo = FALSE, message=FALSE, fig.width=7.2, fig.height=4.45, fig.cap="Figure 4. Bot plot showing the distributions of median coefficients of variation computed based on peptides originating from the same protein."}
+MedianCVplot
+```
+
+
+The results on the distribution of median CVs showed that most median CVs of 100-cell channels were smaller than those of the empty channels, indicating that the protein quantifications for 100-cell samples were much more consistent than those for empty wells. Still, one channel of the Sox17-RFP+ and two of the Bra-GFP+ showed higher median CVs than empty channels; these three channels were removed. 
+
+####  6.3. Filter based on the MedianRI and MedianCV  
+
+Filtering out based on the `MedianCV` and `MedianRI`
+
+Based on the distribution of the Empty, we can decides which MedianCV threshold (`ts` in this study) and remove channels/cells that exhibit higher MedianCV than the Empty channels. 
+
+```{r}
+scp <- scp[, !is.na(scp$MedianCV) & scp$MedianCV < ts, ]
+```
+
+Figure 4 shows the MedianRI and MedianCV of channels containing reporter cells after being filtered out the MedianRI and MedianCV metrics. 
+
+```{r include=FALSE, message=FALSE}
+#Plot after filtering
+
+#MedianRI
+MedianRIplotQC <- scp %>% colData %>% data.frame %>%
+  ggplot(aes(x = Population, y = MedianRI, fill = Population)) +
+  #geom_boxplot(width=0.5) +
+  geom_violin(adjust=0.75) + geom_boxplot(width=.025) +
+  stat_summary(fun=mean, geom="point", fill="#D92721", shape=21, size=1)+
+  scale_fill_manual(values = colour.Chan) +
+  geom_jitter(aes(colour = Dataset),
+              alpha = 0.9, shape=16, size = 2,
+              position = position_jitter(width = 0.15, height = 0.001))+
+  scale_colour_manual(values = colour.100) +
+  scale_y_log10(breaks = trans_breaks("log10", function(x) {10^x}),
+                labels = trans_format("log10", math_format(10^.x)),
+                limit = c(10^2, 10^6))+
+  #geom_hline(yintercept = ts, linetype='dashed', col = 'red') +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(),
+        axis.title.x = element_blank())+
+  ggtitle(paste0(expdeg," - MedianRI of Peptide Intensity after QC"))
+
+
+MedianCVplotQC <- scp %>% getWithColData("Peptides") %>% colData %>% data.frame %>%
+  ggplot(aes(x = Population, y = MedianCV, fill = Population)) +
+  geom_boxplot(width=0.4) +
+  stat_summary(fun=mean, geom="point", fill="#D92721", shape=21, size=1)+
+  scale_fill_manual(values = colour.Chan) +
+  geom_jitter(aes(colour = Dataset),
+              alpha = 0.9, shape=16, size = 2,
+              position = position_jitter(width = 0.15, height = 0.001))+
+  scale_colour_manual(values = colour.100)+
+  ylim(0,1) +
+  geom_hline(yintercept = ts, linetype='dashed', col = 'red') +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(),
+        axis.title.x = element_blank())+
+  ggtitle(paste0(expdeg," - MedianCV of Peptide Intensity after QC"))
+```
+
+```{r, echo = FALSE, out.width=c('50%', '50%'), fig.show='hold', fig.cap="Figure 5. Violin plot and Bot plot showing the distributions of medianRI and medianCV after quality control."}
+MedianRIplotQC
+MedianCVplotQC
+```
+
+
+After filtering, there were `r length(colData(scp)[, "Population"])` remaining channels 
+
+```{r echo=FALSE}
+#Return Population to character (required for Batch correction)
+scp$Population <- as.character(scp$Population)
+#### Number channels per pell population  
+poputable <- t(as.data.frame(table(colData(scp)[, "Population"])))
+colnames(poputable) <- poputable[1,]
+poputable <- poputable[-1, ]
+poputable <- t(as.data.frame(poputable))
+rownames(poputable) <- c("Channels")
+knitr::kable(poputable)
+```
+
+Further processing the QC peptide data including: Normalization, Filter peptides based on missing data, Log-transformation  
+  
+### 7. Normalization  
+
+This normalization procedure is suggested in the SCoPE2 analysis. Normalization steps included:  
+- First columns (samples) of the peptide data were normalized by dividing the relative intensities by the median relative intensities.  
+- Then, the rows (peptides) were normalized by dividing the relative intensities by the mean relative intensities.  
+
+```{r}
+# Divide columns by median
+scp <- sweep(scp, 
+             i = "Peptides",
+             MARGIN = 2,
+             FUN = "/",
+             STATS = colMedians(assay(scp[["Peptides"]]), na.rm = TRUE),
+             name = "Peptides_norm_col")
+# Divide rows by mean
+scp <- sweep(scp,
+             i = "Peptides_norm_col",
+             MARGIN = 1,
+             FUN = "/",
+             STATS = rowMeans(assay(scp[["Peptides_norm_col"]]), na.rm = TRUE),
+             name = "Peptides_norm")
+
+```
+  
+### 8. Filter peptides based on missing data  
+  
+Peptides that contain many missing values are not informative and needed to be removed. 
+In this study, peptides with more than 99 % missing data were removed. 
+```{r, echo=TRUE}
+scp <- filterNA(scp,
+                i = "Peptides_norm",
+                pNA = 0.99)
+```
+  
+### 9. Log-transformation  
+  
+```{r}
+scp <- logTransform(scp,
+                    base = 2,
+                    i = "Peptides_norm",
+                    name = "Peptides_log")
+```
+
+  
+## I.3. Protein level  
+  
+Similarly to aggregating PSMs, peptide data were aggregated to protein data
+
+### 10. Aggregate peptide data to protein data  
+  
+```{r message=FALSE}
+scp <- aggregateFeatures(scp,
+                         i = "Peptides_log",
+                         name = "Proteins",
+                         fcol = "Leading.razor.protein",
+                         fun = matrixStats::colMedians, na.rm = TRUE)
+```
+
+The protein values were further processed in three steps: normalization, imputation and batch correction.
+
+### 11. Normalization  
+  
+Protein normalization was performed similarly to peptide normalization; however, as data were log-transformed at the peptide level, data were subtracted by the statistic (median or mean) instead of dividing.
+
+
+```{r}
+scp %>%
+  ## Center columns with median
+  sweep(i = "Proteins",
+        MARGIN = 2,
+        FUN = "-",
+        STATS = colMedians(assay(scp[["Proteins"]]),
+                           na.rm = TRUE),
+        name = "Proteins_norm_col") %>%
+  ## Center rows with mean
+  sweep(i = "Proteins_norm_col",
+        MARGIN = 1,
+        FUN = "-",
+        STATS = rowMeans(assay(.[["Proteins_norm_col"]]),
+                         na.rm = TRUE),
+        name = "Proteins_norm") ->
+  scp
+```
+
+### 12. Imputation (using the KNN algorithm)  
+  
+Before imputation, there percentage of missingness is around `r round(scp[["Proteins_norm"]] %>% assay %>% is.na %>% mean*100,2)`%.
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+misval <- longFormat(scp[, , "Proteins_norm"]) %>%
+  data.frame %>%
+  group_by(colname) %>%
+  summarize(missingness = mean(is.na(value))) %>%
+  ggplot(aes(x = missingness)) +
+  geom_histogram() +
+  xlim(0, 1) +
+  theme_bw()
+
+```
+
+
+``` {r , echo=FALSE, fig.cap="Figure 6. Percentage of missingness."}
+misval
+```
+
+K nearest neighbors algorithm were used for imputation, with k = 4. 
+  
+```{r message=FALSE}
+scp <- impute(scp,
+              i = "Proteins_norm",
+              method = "knn",
+              k = 4, rowmax = 1, colmax= 1,
+              maxp = Inf, rng.seed = 1234)
+```
+
+### 13. Batch correction (using the ComBat algorithm)  
+  
+As variance was observed between batches, batch correction was performed to remove batch effect and to minimize variance between batches.
+```{r message=FALSE, warning=FALSE}
+sce <- getWithColData(scp, "Proteins_norm")
+batch <- colData(sce)$Raw.file
+model <- model.matrix(~ as.character(Population), data = colData(sce))
+
+assay(sce) <- ComBat(dat = assay(sce),
+                     batch = batch,
+                     mod = model)
+addAssay(scp,
+         y = sce,
+         name = "Proteins_batchC") %>%
+  addAssayLinkOneToOne(from = "Proteins_norm",
+                       to = "Proteins_batchC") ->
+  scp
+```
+
+### 14. Reconstructing the dataset for Downstream analysis
+  
+Taking out only the batch assay for further analysis.  
+  
+```{r, message=FALSE, warning=FALSE}
+#Picking only of Experiments/Assays of interest (Here: Batch correction assay)
+gas.DR <- getWithColData(scp, "Proteins_batchC")
+```
+```{r include=FALSE}
+#Add a scale-log assays for some heatmap/visualization
+assay(gas.DR,"scaleassay") <- t(scale(t(assay(gas.DR,"assay")), 
+                                      center = TRUE, scale = TRUE))
+```
+
+There were proteins that did not contain geneID, then they were needed to be added manually  
+
+```{r echo=FALSE}
+blankgene <- gas.100[match(rownames(gas.DR), gas.100$Leading.razor.protein),][,c("Leading.razor.protein","Gene.names")]
+```
+
+Find proteins that have no corresponding gene
+```{r}
+blankgene[which(blankgene[,"Gene.names"] == ""),]
+```
+Search on Uniprot for these proteins
+```{r}
+gas.100[2836,"Gene.names"] <- "Nt5dc2"
+gas.100[6472,"Gene.names"] <- "Polr2m"
+gas.100[3545,"Gene.names"] <- "Trir"
+gas.100[2681,"Gene.names"] <- "Mfap1b"
+gas.100[3809,"Gene.names"] <- "RTRAF"
+```
+
+```{r include=FALSE}
+#Change rownames gas.DR from proteins names to correspoding gene names
+rownames(gas.DR) <- gas.100[match(rownames(gas.DR), gas.100$Leading.razor.protein),]$Gene.names
+```
+  
+    
+# II. DIMENSIONALITY REDUCTION AND VISUALIZATION  
+
+A total of `r nrow(gas.DR)` proteins passed the filtering. 
+
+## 1. Principal component analysis  
+
+Principal component analysis (PCA) was computed using the top most highly variable expressed proteins since focusing on these proteins may reduce technical noise and emphasize biological signals (adapted from single-cell RNA-seq analysis). Since the number of detected proteins was lower compared to that of bulk samples, the top 500 most highly variable expressed proteins were chosen for PCA analysis. 
+
+```{r include=FALSE}
+#Change order for PCA plot
+colour.PCA <- c("#53BB79","dodgerblue","#E03E3E","#EF8228")
+```
+```{r}
+set.seed(100)
+PCAtop <- 500
+gas.DR <- runPCA(gas.DR,
+                 ncomponents = 10,
+                 ntop = PCAtop,
+                 scale = FALSE,
+                 exprs_values = "assay",
+                 name = "PCA")
+```
+
+```{r include=FALSE}
+#1.2. PCA plot
+PCAplot <- plotReducedDim(gas.DR,
+               dimred = "PCA",
+               colour_by = "Population",
+               point_alpha = 0.8)+
+  ggplot2::scale_color_manual(values = colour.PCA)+
+  labs(colour = "Population")+
+  xlab(paste0("PC1 (", round(attr(reducedDim(gas.DR), "percentVar")[1],1), "%)"))+
+  ylab(paste0("PC2 (", round(attr(reducedDim(gas.DR), "percentVar")[2],1), "%)"))
+```
+
+
+```{r include=FALSE}
+#1.2. PCA Check Batch
+gas.DR$lcbatch <- as.factor(gas.DR$lcbatch ) 
+PCAplotbatch <- plotReducedDim(gas.DR,
+                          dimred = "PCA",
+                          colour_by = "lcbatch",
+                          point_alpha = 0.8)+
+  ggplot2::scale_color_manual(values = c("#D88C4C","#1498BE"))+
+  labs(colour = "Batch")+
+  xlab(paste0("PC1 (", round(attr(reducedDim(gas.DR), "percentVar")[1],1), "%)"))+
+  ylab(paste0("PC2 (", round(attr(reducedDim(gas.DR), "percentVar")[2],1), "%)"))
+```
+
+```{r include=FALSE}
+#Take assay without batch
+gas.DR.nB <- getWithColData(scp, "Proteins_norm")
+
+set.seed(100)
+PCAtop <- 500
+gas.DR.nB <- runPCA(gas.DR.nB,
+                 ncomponents = 10,
+                 ntop = PCAtop,
+                 scale = FALSE,
+                 exprs_values = "assay",
+                 name = "PCA")
+
+#Note: If scale=TRUE, the expression values for each feature are standardized 
+#so that their variance is unity. This will also remove features with standard deviations below 1e-8.
+#1.4. PCA plot - No Batch
+PCAplotNB <- plotReducedDim(gas.DR.nB,
+                          dimred = "PCA",
+                          colour_by = "Population",
+                          point_alpha = 0.8)+
+  ggplot2::scale_color_manual(values = colour.PCA)+
+  labs(colour = "Population")+
+  #theme(legend.position="none")+
+  xlab(paste0("PC1 (", round(attr(reducedDim(gas.DR.nB), "percentVar")[1],1), "%)"))+
+  ylab(paste0("PC2 (", round(attr(reducedDim(gas.DR.nB), "percentVar")[2],1), "%)"))
+```
+
+
+```{r include=FALSE}
+gas.DR.nB$lcbatch <- as.factor(gas.DR.nB$lcbatch ) 
+PCAplotbatchNB <- plotReducedDim(gas.DR.nB,
+                               dimred = "PCA",
+                               colour_by = "lcbatch",
+                               point_alpha = 0.8)+
+  ggplot2::scale_color_manual(values = c("#D88C4C","#1498BE"))+
+  labs(colour = "Batch")+
+  #theme(legend.position="none")+
+  xlab(paste0("PC1 (", round(attr(reducedDim(gas.DR.nB), "percentVar")[1],1), "%)"))+
+  ylab(paste0("PC2 (", round(attr(reducedDim(gas.DR.nB), "percentVar")[2],1), "%)"))
+```
+
+PCA projection demonstrated reproducibility between biological and technical replicates (Figure 5). PCA analysis of 100-cell samples revealed similar segregation of germ layer-specific cell populations with that of bulk samples, except for the overlapping of the Bra-GFP+ and Triple-Neg clusters in the 100-cell sample.  
+
+
+```{r, echo=FALSE, out.width=c('50%', '50%'), fig.width=3, fig.height=3, fig.cap="Figure 7. PCA plot of four sorted cell populations. PCA was computed from the top 500 most highly variable expressed proteins.", fig.show='hold'}
+PCAplotbatch
+PCAplot
+```
+
+
+```{r include=FALSE}
+#Percentage of variance explained by each PCs
+pv <- attr(reducedDim(gas.DR), "percentVar")
+pvplot <- data.frame(c(seq(1,length(pv))),pv)
+
+#Find elbow percentage of variance explained
+elbow <- PCAtools::findElbowPoint(pv)
+```
+
+Take only the first `r elbow` PCs. These two clusters were only slightly separated on PC3 and PC4 (Figure 6). For the main top 100 clustering determinants contributing to the first 4 PCs in PCA. This results indicate that the proteomes of 100-cell input allow segregation of Mt1-BFP+, Sox17-RFP+, and Bra-GFP+ populations but poorly discriminating the Bra-GFP+ with Triple-Neg populations.
+
+```{r include=FALSE, echo=FALSE}
+#Take only 3 PC
+reducedDim(gas.DR, "PCA.elbow") <- reducedDim(gas.DR)[,1:elbow]
+#reducedDimNames(gas.DR)
+
+#Check first 3 PC correlation
+PCAtoplot <- plotPCA(gas.DR, 
+                     ncomponents = elbow, 
+                     colour_by = "Population")+
+  ggplot2::scale_color_manual(values = colour.PCA)+
+  labs(colour = "Population")#+
+  #theme(legend.position="none")
+```
+  
+```{r echo=FALSE, fig.width=5, fig.height=4, fig.cap="Figure 8. PCA projections for the first 4 PCs. Although segregations can be observed for Mt1-BFP+ and Sox17-RFP+ on PC1 and PC2, no complete segregation of Bra-GFP+ and Triple-Neg were observed, even on PC3 and PC4", fig.show='hold'}
+PCAtoplot
+```
+
+
+
+Without batch correction, we hardly detected the separation among datasets (Figure 7).
+```{r echo=FALSE, out.width=c('50%', '50%'),fig.width=3, fig.height=3, fig.cap="Figure 9. PCA plot of four sorted cell populations without batch correction.", fig.show='hold'}
+PCAplotbatchNB
+PCAplotNB
+```
+
+
+## 2. Percentage of variance explained  
+
+Top `r elbow` PCs explain for `r round(pvplot$pv[1:4] %>% sum, 2)`%.
+
+```{r}
+pvPlot <- pvplot %>% ggplot(aes(x=pvplot[,1],y=pvplot[,2])) +
+  geom_line(color="blue") +
+  labs(title="Plot % variance explained",
+       x ="PC",
+       y = "% variance explained")+
+  geom_vline(xintercept = elbow,
+             linetype="dashed",
+             color = "red", size=1)+
+  theme_classic()
+```
+
+```{r echo=FALSE, fig.width=4, fig.height=3, fig.cap="Figure 10. Plot for Percentage of variance explained"}
+pvPlot
+```
+
+  
+
+## 3. Uniform Manifold Approximation and Projection   
+  
+UMAP was performed based on the first three PCAs above. UMAP shows a similar trend with the PCA analysis. 
+  
+```{r include=FALSE}
+set.seed(100)
+gas.DR <- runUMAP(gas.DR,
+                  ncomponents = 3,
+                  exprs_values = "assay",
+                  n_neighbors = 4,
+                  dimred = "PCA.elbow",
+                  name = "UMAP")
+UMAPplot <- plotReducedDim(gas.DR,
+               dimred = "UMAP",
+               colour_by = "Population",
+               point_alpha = 0.5)+
+  ggplot2::scale_color_manual(values = colour.PCA)+
+  labs(colour = "Population")
+UMAPplot
+```
+
+```{r echo=FALSE, fig.width=3, fig.height=2.8, fig.cap="Figure 11. UMAP plot for 100-cell experiment", fig.show='hold'}
+UMAPplot
+```
+
+## 4. Heatmap for PCA determinants/genes  
+
+```{r include=FALSE}
+pcrot <- attr(reducedDim(gas.DR),"rotation")
+#Number of PC
+npc <- 4
+genenum <- 118
+pclist <- list()
+for (i in 1:npc) {
+  pc <- round(pvplot$pv[i]/sum(pvplot$pv[1:npc])*genenum)
+  genePC <- rownames(pcrot[order(abs(pcrot[,i]), decreasing = T)[1:pc],])
+  pclist[[i]] <- genePC
+}
+#list of protein contribute to PC1, PC2, PC3
+listPC <- c(pclist[[1]],pclist[[2]],pclist[[3]],pclist[[4]])
+#Find the top PCA determinants - remove last one to keep top 100 determinant
+PCAdtmn <- which(match(rownames(gas.DR), listPC[-119])>0)
+```
+
+Take data of `r elbow` top PC determinants.
+  
+```{r include=FALSE}
+#Take data of n top PC determinants - Scale data (non-Scale is also possible)
+gas.HM <- assay(gas.DR,"scaleassay")[PCAdtmn,]
+
+#Shorten col names
+colnames(gas.HM) <- sub('D0370_100_1Reporter.intensity.*','D0370_100_1',colnames(gas.HM))
+colnames(gas.HM) <- sub('D0370_100_2Reporter.intensity.*','D0370_100_2',colnames(gas.HM))
+colnames(gas.HM) <- sub('D0370_100_3Reporter.intensity.*','D0370_100_3',colnames(gas.HM))
+colnames(gas.HM) <- sub('D0386_100_1Reporter.intensity.*','D0386_100_1',colnames(gas.HM))
+colnames(gas.HM) <- sub('D0386_100_2Reporter.intensity.*','D0386_100_2',colnames(gas.HM))
+
+#Create Heatmap for top PC determinants
+#Manually create legend of Cells Population and Datasets
+lgChan <- Legend(labels = c("Mt1-BFP+","Sox17-RFP+","Bra-GFP+","Triple-Neg"), 
+                legend_gp = gpar(fill = colour.Chan), 
+                title = "Population")
+lgData <- Legend(labels = c("0370_1","0370_2","0370_3","0386_1","0386_2"),
+                 legend_gp = gpar(fill = c("#D88C4C","#E49D41","#FEB447","#06CDE0","#1498BE")),
+                 title = "Datasets")
+pL = packLegend(list = list(lgChan, lgData))
+```
+
+  
+Since both top `r elbow` PCs contribute to the separation of clusters in PCA, top `r length(PCAdtmn)` proteins contributing to PC1 and PC2 were chosen for further analysis (based on attr(,rotation) matrix provided by scater package). After remove duplicated proteins (proteins that contribute to both PC1 and PC2), there were remaining  `r length(PCAdtmn)` proteins were then plotted into heatmap (with scaled log2 values, using Euclidean distances and ward.D2 hierarchical clustering).
+
+
+```{r include=FALSE}
+#(Wihout spliting: remove "column_split = 4,")
+gas.HM.hc <- Heatmap(gas.HM, name = "Scale Log \nAbundance",
+                     clustering_distance_rows = "pearson",
+                     clustering_method_rows = "ward.D2",
+                     cluster_columns = dendsort(hclust(dist(t(gas.HM)))),
+                     col = colour.hm,
+                     #heatmap_legend_param = list(direction = "horizontal"),
+                     top_annotation = HeatmapAnnotation(Population =gas.DR$Population,
+                                                        Datasets = colnames(gas.HM),
+                                                        border = TRUE,gap = unit(0, "points"),
+                                                        col = list(Population =c("Mt1-BFP+" = "dodgerblue",
+                                                                                 "Sox17-RFP+" = "#E03E3E",
+                                                                                 "Bra-GFP+" = "#53BB79",
+                                                                                 "Triple-Neg" = "#EF8228"),
+                                                                   Datasets = c("D0370_100_1"="#D88C4C",
+                                                                                "D0370_100_2"="#E49D41",
+                                                                                "D0370_100_3"="#FEB447",
+                                                                                "D0386_100_1"="#06CDE0",
+                                                                                "D0386_100_2"="#1498BE")),
+                                                        show_legend = TRUE),
+                     heatmap_width = unit(8, "cm"), 
+                     heatmap_height = unit(18, "cm"),
+                     column_names_gp = grid::gpar(fontsize = 3),
+                     row_names_gp = grid::gpar(fontsize = 5),
+                     column_title = paste0("Top ", length(PCAdtmn)," proteins contribute\n to PC1 and PC2"))
+
+
+
+```
+
+```{r, echo=FALSE, fig.height=8.25, fig.width=6.25, fig.cap="Figure 12. Heatmap of scaled log-transformed protein abundance representing the main (top 100) determinants. Number of proteins extracted per PC: 63, 25, 20, and 11 for PC1, PC2, PC3, and PC4 respectively (19 proteins contributed to more than one PC)."}
+gas.HM.hc
+```
+
+For the main top 100 clustering determinants contributing to the first `r elbow` PCs in PCA, unsupervised hierarchical clustering resembled similar protein expressions in all the replicates corresponding to the Mt1-BFP+ and Sox17-RFP+ populations (Figure 10). Heatmap of scaled log-transformed protein abundance showed an upregulation of a set of proteins in each of cell population. These results indicate that the proteomes of 100-cell input allow segregation of Mt1-BFP+, Sox17-RFP+, and Bra-GFP+ populations but poorly discriminating the Bra-GFP+ with Triple-Neg populations.
+
+
+# III. DOWNSTREAM ANALYSES  
+
+## 1. Detecting Protein Markers  
+  
+The proteins that were highly expressed are detected using `scran` package. To interpret the clustering results from each cell population, marker gene detection was performed to identify the proteins that express differentially between clusters. There are various marker detection strategies; in this case the pairwise tests between clusters with `findMarkers`. `findMarkers` helps to identify a list of marker proteins that uniquely separate one cluster against the rest, that it selects the top DE proteins from each pairwise comparison involving a particular cluster to assemble a set of candidate markers for that cluster.  
+There are several statistical tests available, including: t-test, Wilcoxon rank sum test, or binomial test. Finding cluster-specific markers could be depend on the proteins that are high ranking, indicating differential expression in any pairwise comparison. Balancing stringency and generality of the test can be considered based on research interest. In general:  
+- `pval.type="all"`: too stringent  
+- `pval.type="any"`: too generous  
+- `pval.type="some"`: compromise  
+  
+```{r eval=FALSE, echo=FALSE}
+#some option from findMarkers()
+#Test <- c("t", "wilcox", "binom")
+#pval.type <- c("any", "some", "all")
+```
+  
+As the level of proteins abundance in this experiments is not too dynamic, pval.type="any" were used
+  
+```{r}
+markers <- findMarkers(gas.DR,
+                       assay.type = "assay",
+                       groups=gas.DR$Population,
+                       pval.type="any",
+                       lfc=1)
+```
+  
+  
+### 1.1. Heatmap for Marker proteins
+
+```{r include=FALSE}
+#layer = ("BFP","GFP","Rest","RFP") <- need to re-write for more automation
+
+#Layer
+layer <-  c("Mt1-BFP+","Bra-GFP+","Triple-Neg","Sox17-RFP+")
+
+#choose n top proteins
+ntop <- 10
+
+#Colour
+col.hm <- colorRamp2(seq(-4, 4, length = 14), 
+                      colour.hm)
+
+#Generate loop for Heatmap
+for (i in layer){
+  layer.marker <- markers[[i]]
+  top.marker <- layer.marker[layer.marker$Top <= ntop,]
+  LFCsig <- getMarkerEffects(top.marker[1:ntop,])
+  plot <- Heatmap(LFCsig,
+                  col = col.hm,
+                  column_title = paste0("Top ", ntop, " differential expressed proteins of ",i," \nover other populations"),
+                  heatmap_legend_param = list(
+                    #legend_height = unit(4, "cm")))
+                    #title_position = "lefttop-rot"),
+                    #direction = "horizontal",
+                    title = "Log2FC"),
+                  show_heatmap_legend = T)
+  assign(paste0("Marker",i),plot)
+}
+```
+
+
+```{r, echo=FALSE, out.width=c('50%', '50%'), fig.show='hold', fig.width=4.25, fig.height=6.25}
+`MarkerMt1-BFP+`
+`MarkerSox17-RFP+`
+```
+```{r, echo=FALSE, out.width=c('50%', '50%'), fig.show='hold', fig.width=4.25, fig.height=6.25, fig.cap="Figure 13. Scaled log-fold intensity changes of proteins for each population over the remaining population"}
+`MarkerBra-GFP+`
+`MarkerTriple-Neg`
+```
+
+
+### 1.2. Detect all the Marker proteins/genes  
+
+List all marker gene
+
+```{r}
+genemarker <- list()
+for(i in layer){
+  layer.marker <- markers[[i]]
+  top.marker <- layer.marker[layer.marker$Top <= ntop,]
+  genemarker[[i]] <- rownames(top.marker[,])
+}
+
+```
+  
+```{r include=FALSE}
+
+#Marker gene list 
+EMK <- which(match(rownames(gas.DR), genemarker %>% unlist)>0)
+#Remove duplicated proteins
+EMK <- EMK[-which(duplicated(rownames(gas.DR)[EMK]))]
+```
+  
+### 1.3. Plot all Marker proteins/genes  
+
+#### GeneMarker plot  
+  
+```{r include=FALSE, echo=FALSE}
+GMplot <- plotExpression(gas.DR, 
+                         rownames(gas.DR)[EMK],
+                         exprs_values = "assay",
+                         log2_values = FALSE, #already log2
+                         one_facet=TRUE,
+                         colour_by = "Population",)+
+  ggplot2::scale_color_manual(values = colour.PCA)+
+  labs(colour = "Population")+
+  ggtitle(paste0("Expression of top ", ntop," marker per cell population"))
+```
+
+Create top 10 Gene Markers plot for each population:  
+
+```{r echo=FALSE, fig.width=7.25, fig.height=4.25, fig.cap="Figure 14. Log intensity expression level for each detected marker proteins in each cell population"}
+GMplot
+```
+
+
+#### Dot plot  
+
+```{r include=FALSE}
+#unscale
+dotEMK <- plotDots(gas.DR, 
+                   features=rownames(gas.DR)[EMK], 
+                   exprs_values = "assay",
+                   group="Population") + 
+  ggtitle(paste0("Top ", ntop," markers per cell population"))+
+  theme_bw()
+
+```
+
+```{r echo=FALSE, fig.width=4.635,fig.height=7.50, fig.cap="Figure 15. Proportion of detected expression values (NumDetected) and the Average expression for each protein features in each cell population."}
+dotEMK
+```
+
+## 2. Enrichment analysis  
+
+Detect DE proteins for further analysis using t-test (Wilcoxon rank sum test could also be used). LFC > 0.0125 was set for retaining more information.
+
+```{r}
+markers <- findMarkers(gas.DR,
+                       assay.type = "assay",
+                       groups=gas.DR$Population,
+                       pval.type="any",
+                       lfc=0.0125)
+
+```
+  
+### 3.1. On Mt1-BFP+ population 
+  
+```{r include=FALSE}
+layer <- "Mt1-BFP+"
+DElayer <- as.data.frame(subset(markers[[layer]],FDR <0.05 ))
+dim(DElayer)
+#Choose LFC
+sig_lfc <- 0.5
+#Gene up
+DEup <- rownames(DElayer[DElayer$summary.logFC>sig_lfc,])
+length(DEup)
+#Gene down
+DEdown <- rownames(DElayer[DElayer$summary.logFC<(-sig_lfc),])
+length(DEdown)
+
+###
+genes <- keys(org.Mm.eg.db, keytype="SYMBOL")
+geneUniverse <- AnnotationDbi::select(org.Mm.eg.db, 
+                                      keys = genes,
+                                      columns=c("ENTREZID"), 
+                                      keytype = "SYMBOL")
+
+```
+  
+#### 1. Gene Ontology
+  
+```{r}
+pvalueCutoff <- 0.05
+qvalueCutoff <- 0.2
+```
+
+```{r include=FALSE}
+#MF: Molecular Function: molecular activities of gene products 
+goDEMF <- enrichGO(DEup,
+                   org.Mm.eg.db,
+                   keyType = "SYMBOL",
+                   ont = "MF",
+                   pvalueCutoff = pvalueCutoff,
+                   pAdjustMethod = "fdr",
+                   qvalueCutoff = qvalueCutoff)
+
+#CC: Cellular Component where gene products are active 
+goDECC <- enrichGO(DEup,
+                   org.Mm.eg.db,
+                   keyType = "SYMBOL",
+                   ont = "CC",
+                   pvalueCutoff = pvalueCutoff,
+                   pAdjustMethod = "fdr",
+                   qvalueCutoff = qvalueCutoff)
+
+#BP: Biological Process pathways and larger processes made up of 
+#the activities of multiple gene products
+goDEBP <- enrichGO(DEup,
+                   org.Mm.eg.db,
+                   keyType = "SYMBOL",
+                   ont = "BP",
+                   pvalueCutoff = pvalueCutoff,
+                   pAdjustMethod = "fdr",
+                   qvalueCutoff = qvalueCutoff)
+```
+
+Visualization of Functional Enrichment Result
+```{r include=FALSE}
+#1.Bar Plot
+goDEMFplot <- dotplot(goDEMF, showCategory=30) + 
+  ggtitle(paste0("UpGene in ",layer, "\n Molecular Function - FDR < ",pvalueCutoff))
+goDECCplot <- dotplot(goDECC, showCategory=30) + 
+  ggtitle(paste0("UpGene in ",layer, "\n Cellular Component - FDR < ",pvalueCutoff))
+goDEBPplot <- dotplot(goDEBP, showCategory=30)+ 
+  ggtitle(paste0("UpGene in ",layer, "\n Biological Process - FDR < ",pvalueCutoff))
+title <- "Over Representation Analysis of Mt1-BFP+"
+DElayerGO <- plot_grid(goDEMFplot, 
+                       #goDECCplot,
+                       goDEBPplot,
+                       labels = title, 
+                       ncol=2)
+
+```
+
+```{r, echo=FALSE, fig.width=18, fig.height=7.25}
+DElayerGO
+```
+
+#### 2. Gene-Concept Network  
+  
+```{r, include=FALSE}
+#Gene List, include up and down
+
+#Gene up
+DELup <- DElayer[DElayer$summary.logFC>sig_lfc,]
+
+#Gene down
+DELdown <- DElayer[DElayer$summary.logFC<(-sig_lfc),]
+
+#Gene List
+DElist <- rbind(DELup, DELdown)
+dim(DElist)
+DElistFC = DElist[,"summary.logFC"]
+names(DElistFC) = as.character(rownames(DElist))
+DElist <- sort(DElistFC, decreasing = TRUE)
+
+
+```
+
+```{r include=FALSE, message=FALSE}
+###
+#MF: Molecular Function: molecular activities of gene products
+gseDEMF <- gseGO(geneList = DElist,
+                 OrgDb = org.Mm.eg.db,
+                 keyType = "SYMBOL",
+                 ont          = "MF",
+                 pvalueCutoff = pvalueCutoff,
+                 pAdjustMethod = "fdr",
+                 verbose      = TRUE)
+
+#CC: Cellular Component where gene products are active 
+gseDECC <- gseGO(geneList = DElist,
+                 OrgDb = org.Mm.eg.db,
+                 keyType = "SYMBOL",
+                 ont          = "CC",
+                 pvalueCutoff = pvalueCutoff,
+                 pAdjustMethod = "fdr",
+                 verbose      = TRUE)
+
+##BP: Biological Process pathways and larger processes made up of 
+#the activities of multiple gene products
+gseDEBP <- gseGO(geneList = DElist,
+                 OrgDb = org.Mm.eg.db,
+                 keyType = "SYMBOL",
+                 ont          = "BP",
+                 pvalueCutoff = pvalueCutoff,
+                 pAdjustMethod = "fdr",
+                 verbose      = TRUE)
+```
+  
+
+  
+```{r include=FALSE}
+#or colorEdge = TRUE
+cnegoDEMF <- cnetplot(goDEMF,
+                      showCategory = 5,
+                      foldChange=DElist,
+                      layout = "kk",
+                      categorySize="pvalue",
+                      node_label="all")
+cnegoDEBP <- cnetplot(goDEBP,
+                      showCategory = 5,
+                      foldChange=DElist,
+                      layout = "kk",
+                      categorySize="pvalue",
+                      node_label="all")
+title <- "Gene-Concept Network - MF and BP"
+cneplot <- cowplot::plot_grid(cnegoDEMF,
+                              cnegoDEBP,
+                              labels = title,
+                              ncol=2)
+```
+
+```{r, echo=FALSE, fig.width=19,fig.height=7.25}
+cneplot
+```
+
+  
+### 3.2. On Sox17-RFP+ population 
+  
+```{r include=FALSE}
+layer <- "Sox17-RFP+"
+DElayer <- as.data.frame(subset(markers[[layer]],FDR <0.05 ))
+dim(DElayer)
+#Choose LFC
+sig_lfc <- 0.5
+#Gene up
+DEup <- rownames(DElayer[DElayer$summary.logFC>sig_lfc,])
+length(DEup)
+#Gene down
+DEdown <- rownames(DElayer[DElayer$summary.logFC<(-sig_lfc),])
+length(DEdown)
+###
+genes <- keys(org.Mm.eg.db, keytype="SYMBOL")
+geneUniverse <- AnnotationDbi::select(org.Mm.eg.db, 
+                                      keys = genes,
+                                      columns=c("ENTREZID"), 
+                                      keytype = "SYMBOL")
+```
+  
+#### 1. Gene Ontology  
+  
+```{r}
+pvalueCutoff <- 0.05
+qvalueCutoff <- 0.2
+```
+
+```{r include=FALSE}
+#MF: Molecular Function: molecular activities of gene products 
+goDEMF <- enrichGO(DEup,
+                   org.Mm.eg.db,
+                   keyType = "SYMBOL",
+                   ont = "MF",
+                   pvalueCutoff = pvalueCutoff,
+                   pAdjustMethod = "fdr",
+                   qvalueCutoff = qvalueCutoff)
+#CC: Cellular Component where gene products are active 
+goDECC <- enrichGO(DEup,
+                   org.Mm.eg.db,
+                   keyType = "SYMBOL",
+                   ont = "CC",
+                   pvalueCutoff = pvalueCutoff,
+                   pAdjustMethod = "fdr",
+                   qvalueCutoff = qvalueCutoff)
+#BP: Biological Process pathways and larger processes made up of 
+#the activities of multiple gene products
+goDEBP <- enrichGO(DEup,
+                   org.Mm.eg.db,
+                   keyType = "SYMBOL",
+                   ont = "BP",
+                   pvalueCutoff = pvalueCutoff,
+                   pAdjustMethod = "fdr",
+                   qvalueCutoff = qvalueCutoff)
+```
+
+Visualization of Functional Enrichment Result
+```{r include=FALSE}
+barplot(goDEMF, showCategory=20)
+#2. Dot plot
+goDEMFplot <- dotplot(goDEMF, showCategory=30) + 
+  ggtitle(paste0("UpGene in ",layer, "\n Molecular Function - FDR < ",pvalueCutoff))
+goDECCplot <- dotplot(goDECC, showCategory=30) + 
+  ggtitle(paste0("UpGene in ",layer, "\n Cellular Component - FDR < ",pvalueCutoff))
+goDEBPplot <- dotplot(goDEBP, showCategory=30)+ 
+  ggtitle(paste0("UpGene in ",layer, "\n Biological Process - FDR < ",pvalueCutoff))
+title <- "Over Representation Analysis"
+DElayerGO <- plot_grid(goDEMFplot, 
+                       #goDECCplot,
+                       goDEBPplot,
+                       labels = title, 
+                       ncol=2)
+```
+
+```{r, echo=FALSE, fig.width=18, fig.height=7.25}
+DElayerGO
+```
+
+#### 2. Gene-Concept Network  
+  
+```{r include=FALSE}
+#Gene List, include up and down
+#Gene up
+DELup <- DElayer[DElayer$summary.logFC>sig_lfc,]
+#Gene down
+DELdown <- DElayer[DElayer$summary.logFC<(-sig_lfc),]
+#Gene List
+DElist <- rbind(DELup, DELdown)
+dim(DElist)
+DElistFC = DElist[,"summary.logFC"]
+names(DElistFC) = as.character(rownames(DElist))
+DElist <- sort(DElistFC, decreasing = TRUE)
+```
+
+```{r include=FALSE}
+###
+pvalueCutoff <- 0.2
+#MF: Molecular Function: molecular activities of gene products
+gseDEMF <- gseGO(geneList = DElist,
+                 OrgDb = org.Mm.eg.db,
+                 keyType = "SYMBOL",
+                 ont          = "MF",
+                 pvalueCutoff = pvalueCutoff,
+                 pAdjustMethod = "fdr",
+                 verbose      = TRUE)
+#CC: Cellular Component where gene products are active 
+gseDECC <- gseGO(geneList = DElist,
+                 OrgDb = org.Mm.eg.db,
+                 keyType = "SYMBOL",
+                 ont          = "CC",
+                 pvalueCutoff = pvalueCutoff,
+                 pAdjustMethod = "fdr",
+                 verbose      = TRUE)
+##BP: Biological Process pathways and larger processes made up of 
+#the activities of multiple gene products
+gseDEBP <- gseGO(geneList = DElist,
+                 OrgDb = org.Mm.eg.db,
+                 keyType = "SYMBOL",
+                 ont          = "BP",
+                 pvalueCutoff = pvalueCutoff,
+                 pAdjustMethod = "fdr",
+                 verbose      = TRUE)
+```
+
+
+```{r include=FALSE}
+#or colorEdge = TRUE
+cnegoDEMF <- cnetplot(goDEMF,
+                      showCategory = 5,
+                      foldChange=DElist,
+                      layout = "kk",
+                      categorySize="pvalue",
+                      node_label="all")
+cnegoDEBP <- cnetplot(goDEBP,
+                      showCategory = 5,
+                      foldChange=DElist,
+                      layout = "kk",
+                      categorySize="pvalue",
+                      node_label="all")
+title <- "Gene-Concept Network"
+cneplot <- cowplot::plot_grid(cnegoDEMF,
+                              cnegoDEBP,
+                              labels = title,
+                              ncol=2)
+```
+
+
+```{r, echo=FALSE, fig.width=19,fig.height=7.25}
+cneplot
+```
+
+### 3.3. On Bra-GFP+ population 
+  
+```{r include=FALSE}
+layer <- "Bra-GFP+"
+DElayer <- as.data.frame(subset(markers[[layer]],FDR <0.05 ))
+dim(DElayer)
+#Choose LFC
+sig_lfc <- 0.5
+#Gene up
+DEup <- rownames(DElayer[DElayer$summary.logFC>sig_lfc,])
+length(DEup)
+#Gene down
+DEdown <- rownames(DElayer[DElayer$summary.logFC<(-sig_lfc),])
+length(DEdown)
+
+```
+  
+#### 1. Gene Ontology  
+  
+```{r}
+pvalueCutoff <- 0.05
+qvalueCutoff <- 0.2
+```
+
+```{r include=FALSE}
+#MF: Molecular Function: molecular activities of gene products 
+goDEMF <- enrichGO(DEup,
+                   org.Mm.eg.db,
+                   keyType = "SYMBOL",
+                   ont = "MF",
+                   pvalueCutoff = pvalueCutoff,
+                   pAdjustMethod = "fdr",
+                   qvalueCutoff = qvalueCutoff)
+#CC: Cellular Component where gene products are active 
+goDECC <- enrichGO(DEup,
+                   org.Mm.eg.db,
+                   keyType = "SYMBOL",
+                   ont = "CC",
+                   pvalueCutoff = pvalueCutoff,
+                   pAdjustMethod = "fdr",
+                   qvalueCutoff = qvalueCutoff)
+#BP: Biological Process pathways and larger processes made up of 
+#the activities of multiple gene products
+goDEBP <- enrichGO(DEup,
+                   org.Mm.eg.db,
+                   keyType = "SYMBOL",
+                   ont = "BP",
+                   pvalueCutoff = pvalueCutoff,
+                   pAdjustMethod = "fdr",
+                   qvalueCutoff = qvalueCutoff)
+```
+
+Visualization of Functional Enrichment Result
+```{r include=FALSE}
+barplot(goDEMF, showCategory=20)
+#2. Dot plot
+goDEMFplot <- dotplot(goDEMF, showCategory=30) + 
+  ggtitle(paste0("UpGene in ",layer, "\n Molecular Function - FDR < ",pvalueCutoff))
+goDECCplot <- dotplot(goDECC, showCategory=30) + 
+  ggtitle(paste0("UpGene in ",layer, "\n Cellular Component - FDR < ",pvalueCutoff))
+goDEBPplot <- dotplot(goDEBP, showCategory=30)+ 
+  ggtitle(paste0("UpGene in ",layer, "\n Biological Process - FDR < ",pvalueCutoff))
+title <- "Over Representation Analysis"
+DElayerGO <- plot_grid(goDEMFplot, 
+                       #goDECCplot,
+                       goDEBPplot,
+                       labels = title, 
+                       ncol=2)
+```
+
+```{r, echo=FALSE, fig.width=18, fig.height=7.25}
+DElayerGO
+```
+
+#### 2. Gene-Concept Network  
+
+```{r include=FALSE}
+
+#Gene List, include up and down
+#Gene up
+DELup <- DElayer[DElayer$summary.logFC>sig_lfc,]
+#Gene down
+DELdown <- DElayer[DElayer$summary.logFC<(-sig_lfc),]
+#Gene List
+DElist <- rbind(DELup, DELdown)
+dim(DElist)
+DElistFC = DElist[,"summary.logFC"]
+names(DElistFC) = as.character(rownames(DElist))
+DElist <- sort(DElistFC, decreasing = TRUE)
+```
+
+```{r include=FALSE}
+###
+pvalueCutoff <- 0.2
+#MF: Molecular Function: molecular activities of gene products
+gseDEMF <- gseGO(geneList = DElist,
+                 OrgDb = org.Mm.eg.db,
+                 keyType = "SYMBOL",
+                 ont          = "MF",
+                 pvalueCutoff = pvalueCutoff,
+                 pAdjustMethod = "fdr",
+                 verbose      = TRUE)
+#CC: Cellular Component where gene products are active 
+gseDECC <- gseGO(geneList = DElist,
+                 OrgDb = org.Mm.eg.db,
+                 keyType = "SYMBOL",
+                 ont          = "CC",
+                 pvalueCutoff = pvalueCutoff,
+                 pAdjustMethod = "fdr",
+                 verbose      = TRUE)
+##BP: Biological Process pathways and larger processes made up of 
+#the activities of multiple gene products
+gseDEBP <- gseGO(geneList = DElist,
+                 OrgDb = org.Mm.eg.db,
+                 keyType = "SYMBOL",
+                 ont          = "BP",
+                 pvalueCutoff = pvalueCutoff,
+                 pAdjustMethod = "fdr",
+                 verbose      = TRUE)
+```
+
+```{r include=FALSE}
+#or colorEdge = TRUE
+cnegoDEMF <- cnetplot(goDEMF,
+                      showCategory = 5,
+                      foldChange=DElist,
+                      layout = "kk",
+                      categorySize="pvalue",
+                      node_label="all")
+cnegoDEBP <- cnetplot(goDEBP,
+                      showCategory = 5,
+                      foldChange=DElist,
+                      layout = "kk",
+                      categorySize="pvalue",
+                      node_label="all")
+title <- "Gene-Concept Network"
+cneplot <- cowplot::plot_grid(cnegoDEMF,
+                              cnegoDEBP,
+                              labels = title,
+                              ncol=2)
+```
+
+
+```{r, echo=FALSE, fig.width=19,fig.height=7.25}
+cneplot
+```
+
+
+Gene-concept network revealed the distinct molecular functions of the Mt1-BFP+ population compared to the Sox17-RFP+ and Bra-GFP+ populations. Proteins with higher abundance in Mt1-BFP+ were enriched in ribonucleoside binding and GTP binding, while actin binding and actin filament binding were observed in Sox17-RFP+ and Bra-GFP+. Sox17-RFP+ also involved disulfide oxidoreductase activity, and Bra-GFP+ showed a high mRNA binding.
+
+# IV. Integrate with scRNA-seq dataset  
+
+```{r include=FALSE}
+# Load lists from four cluster in 120h mouse gastruloids 
+DEG_endoderm <- read.delim("Gas.100Data/DEG_endoderm.txt", header = F)
+DEG_ectoderm <- read.delim("Gas.100Data/DEG_ectoderm.txt", header = F)
+DEG_PSM <- read.delim("Gas.100Data/DEG_PSM.txt", header = F)
+DEG_NMP <- read.delim("Gas.100Data/DEG_NMPs.txt", header = F)
+
+#Create data frame contains all clusters
+DEG_all <- data.frame(gene = c(DEG_ectoderm$V1,
+                               DEG_endoderm$V1,
+                               DEG_PSM$V1,
+                               DEG_NMP$V1),
+                      cluster = c(rep("Ecto", nrow(DEG_ectoderm)),
+                                  rep("Endo", nrow(DEG_endoderm)),
+                                  rep("PSM", nrow(DEG_PSM)),
+                                  rep("NMP", nrow(DEG_NMP))))
+
+#Choose only unique gene in van den Brink
+DEG_all<- DEG_all[!duplicated(DEG_all[ , 1]),]
+
+# Annotated each file with cluster
+DEG_endoderm <- DEG_all %>% filter(cluster == "Ecto")
+DEG_ectoderm <- DEG_all %>% filter(cluster == "Endo") 
+DEG_PSM <- DEG_all %>% filter(cluster == "PSM") 
+DEG_NMP <- DEG_all %>% filter(cluster == "NMP")
+
+
+
+## Endoderm
+tmp12 <- which(match(rownames(gas.DR), DEG_endoderm$gene)>0)
+length(tmp12)
+tmp12a <- which(match(DEG_endoderm$gene, rownames(gas.DR))>0)
+length(tmp12a)
+dim(DEG_endoderm[tmp12a, ])
+
+## Ectoderm
+tmp13 <- which(match(rownames(gas.DR), DEG_ectoderm$gene)>0)
+length(tmp13)
+tmp13a <- which(match(DEG_ectoderm$gene, rownames(gas.DR))>0)
+length(tmp13a)
+dim(DEG_ectoderm[tmp13a, ])
+
+## PSM
+tmp6 <- which(match(rownames(gas.DR), DEG_PSM$gene)>0)
+length(tmp6)
+tmp6a <- which(match(DEG_PSM$gene, rownames(gas.DR))>0)
+length(tmp6a)
+dim(DEG_PSM[tmp6a, ])
+
+## NMPs
+tmp7 <- which(match(rownames(gas.DR), DEG_NMP$gene)>0)
+length(tmp7)
+tmp7a <- which(match(DEG_NMP$gene, rownames(gas.DR))>0)
+length(tmp7a)
+dim(DEG_NMP[tmp7a, ])
+
+#Overlapped genes in each cluster
+
+##With gasBulk
+gas.DR.HM.DEG <- rbind(assay(gas.DR,"scaleassay")[tmp12,],
+                    assay(gas.DR,"scaleassay")[tmp13,],
+                    assay(gas.DR,"scaleassay")[tmp6,],
+                    assay(gas.DR,"scaleassay")[tmp7,])
+dim(gas.DR.HM.DEG)
+
+##With van der Brink data
+Brink.DEG <- rbind(DEG_endoderm[tmp12a,],
+                   DEG_ectoderm[tmp13a,],
+                   DEG_PSM[tmp6a,],
+                   DEG_NMP[tmp7a,]) 
+dim(Brink.DEG)
+
+#Shorten col names
+colnames(gas.DR.HM.DEG) <- sub('D0370_100_1Reporter.intensity.*','D0370_100_1',colnames(gas.DR.HM.DEG))
+colnames(gas.DR.HM.DEG) <- sub('D0370_100_2Reporter.intensity.*','D0370_100_2',colnames(gas.DR.HM.DEG))
+colnames(gas.DR.HM.DEG) <- sub('D0370_100_3Reporter.intensity.*','D0370_100_3',colnames(gas.DR.HM.DEG))
+colnames(gas.DR.HM.DEG) <- sub('D0386_100_1Reporter.intensity.*','D0386_100_1',colnames(gas.DR.HM.DEG))
+colnames(gas.DR.HM.DEG) <- sub('D0386_100_2Reporter.intensity.*','D0386_100_2',colnames(gas.DR.HM.DEG))
+
+#Create Heatmap for top PC determinants
+#Manually create legend of Cells Population and Datasets
+lgChan <- Legend(labels = c("Mt1-BFP+","Sox17-RFP+","Bra-GFP+","Triple-Neg"), 
+                 legend_gp = gpar(fill = colour.Chan), 
+                 title = "Population")
+lgData <- Legend(labels = c("0370_1","0370_2","0370_3","0386_1","0386_2"),
+                 legend_gp = gpar(fill = c("#D88C4C","#E49D41","#FEB447","#06CDE0","#1498BE")),
+                 title = "Datasets")
+pL = packLegend(list = list(lgChan, lgData))
+
+
+#Choose overlapped genes (for adding into Heatmap)
+overlapped.genes <- rownames(gas.DR.HM.DEG)
+```
+
+
+```{r include=FALSE}
+gas.DR.HM.DEG.hc <- Heatmap(gas.DR.HM.DEG, name = "Scale Log Abundance",
+                            clustering_distance_rows = "pearson",
+                            clustering_method_rows = "ward.D2",
+                            cluster_columns = dendsort(hclust(dist(t(gas.DR.HM.DEG)))),
+                            col = colour.hm,
+                            #heatmap_legend_param = list(direction = "horizontal"),
+                            top_annotation = HeatmapAnnotation(Population =gas.DR$Population,
+                                                               Datasets = colnames(gas.DR.HM.DEG),
+                                                               border = TRUE,gap = unit(0, "points"),
+                                                               col = list(Population =c("Mt1-BFP+" = "dodgerblue",
+                                                                                    "Sox17-RFP+" = "#E03E3E",
+                                                                                    "Bra-GFP+" = "#53BB79",
+                                                                                    "Triple-Neg" = "#EF8228"),
+                                                                          Datasets = c("D0370_100_1"="#D88C4C",
+                                                                                       "D0370_100_2"="#E49D41",
+                                                                                       "D0370_100_3"="#FEB447",
+                                                                                       "D0386_100_1"="#06CDE0",
+                                                                                       "D0386_100_2"="#1498BE")),
+                                                                          show_legend = TRUE),
+                            right_annotation = rowAnnotation(Brink = Brink.DEG$cluster,
+                                                             border = TRUE,
+                                                             col = list(Brink = c("Ecto" = "dodgerblue2",
+                                                                                  "PSM" = "#B7D468",
+                                                                                  "NMP" = "#2EC20A",
+                                                                                  "Endo" = "#D14239"))),
+                            column_title = paste0("Overlapped ",nrow(gas.DR.HM.DEG)," protein/mRNA \nwith van den Brink et al."),
+                            column_names_gp = grid::gpar(fontsize = 6),
+                            row_names_gp = grid::gpar(fontsize = 1)) +
+  rowAnnotation(gene = anno_text(overlapped.genes, which = "row",gp = gpar(fontsize = 4)),
+                width = max_text_width(unlist(overlapped.genes)) + unit(0.1, "cm"))
+
+```
+
+Integrating with scRNA-seq data showed 39 overlapping genes/proteins. The upregulated proteins belonging to the Mt1-BFP+ population (ectoderm) were also found to be those highly expressed genes in ectoderm cluster in scRNA-seq; however, no obvious correlation was observed between protein expression of Sox17-RFP+, Bra-GFP+, Triple-Neg and endoderm, PSMs, NMPs, respectively. 
+
+```{r, echo=FALSE, fig.height=8.25, fig.width=8.25, fig.cap="Figure 16. Heatmap of scaled log-transformed protein abundance representing overlapping 39 genes/proteins with scRNA-seq data"}
+gas.DR.HM.DEG.hc
+```

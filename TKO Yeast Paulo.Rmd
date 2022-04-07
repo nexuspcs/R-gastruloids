@@ -1,0 +1,1087 @@
+---
+title: "TKO Yeast - Met6, Pfk2, or Ura2"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+library(ggplot2)
+library(VennDetail)
+library(dplyr)
+library(rafalib)
+library(stringr)
+library("RColorBrewer")
+```
+
+#Experimental design
+
+In Paulo et al. study, TMT-labeling strategy was used for yeast strain with different triple knockout (TKO). The design of the study is depicted in Fig. 1. The three deletion strains of highly abundant proteins were digested with trypsin; digested peptide samples were labeled with TMT 10 plex.Each TKO strain were labeled with different TMT reagents, including:
+
+•	Δmet6 strain replicates were conjugated to tags 126, 127N, 127C
+
+•	Δpfk2 strain replicates with tags 128N, 128C, 129N
+
+•	Δura2 strain replicates with tags 129C, 130N, 130C
+
+In this re-analysis, the raw data files were downloaded from Project PXD008009 in PRIDE, provided by Joao Paulo, Publication Date 26/10/2017. The raw files were viewed using FreeStyle 1.7 for instrument identification. Most of the proteome analysis was performed by Proteome Discoverer 2.5 (SequestHT). R was used for downstream analysis, while MaxQuant was used for testing the isobaric matching between runs function.
+
+
+## The TMT percent relative abundance across the nine channels 
+The analysis results were generated Proteome Discoverer 2.5. 
+Following the supplementary file, these are the setting of P.D run.
+For  Sequest HT:
+
+- Precursor Mass Tolerance:  50 ppm
+
+- Fragment Mass Tolerance:  0.9 Da
+
+For Reporter Quantification setting:
+
+- Reporter Abundance Based On:  S/N (This was used due to the unit in Paulo et al.)
+
+- Co-Isolation Threshold:  75
+
+- Average Reporter S/N Threshold:  10
+
+- SPS Mass Matches [%] Threshold:  65 (default)
+
+- Minimum Channel Occupancy [%] Threshold:  0
+
+Normalization and Scaling: NONE
+
+
+# Protein level TKO data
+For Protein level TKO data, the average and SD of three replicates were computed and plotted into barplots.
+
+The summed signal-to-noise ratio was used as the unit for TMT abundance calculation. In order to compare same channels from different replicates, the normalization of signal-to-noise ratio in total 10 channels were performed (sum across all 10 channels for a single protein is 100). Results after normalization were displayed as the ratio of the relative abundance (as %RA) of a TKO protein.
+
+
+```{r, include=FALSE}
+ProPD <- read.csv("Lumos MS3 - NNNS - Strict - Protein.csv")
+```
+
+__Met6__
+
+```{r, include=FALSE}
+### Met6
+
+ProX = "P05694"
+###Normalization
+F1N <- 100/(ProPD[ProPD$Accession == ProX, c(17:26)] %>% unlist %>% sum)
+F2N <- 100/(ProPD[ProPD$Accession == ProX, c(27:36)] %>% unlist %>% sum)
+F3N <- 100/(ProPD[ProPD$Accession == ProX, c(37:46)] %>% unlist %>% sum)
+#Check Factor
+sum(ProPD[ProPD$Accession == ProX, c(17:26)]*F1N)
+sum(ProPD[ProPD$Accession == ProX, c(27:36)]*F2N)
+sum(ProPD[ProPD$Accession == ProX, c(37:46)]*F3N)
+#Calculate new normalization factors
+for (i in 17:26) {
+  ProPD[ProPD$Accession == ProX, c(i)] <- ProPD[ProPD$Accession == ProX, c(i)]*F1N
+}
+for (i in 27:36) {
+  ProPD[ProPD$Accession == ProX, c(i)] <- ProPD[ProPD$Accession == ProX, c(i)]*F2N
+}
+for (i in 37:46) {
+  ProPD[ProPD$Accession == ProX, c(i)] <- ProPD[ProPD$Accession == ProX, c(i)]*F3N
+}
+```
+
+Check abundance after normalization:
+
+```{r, include=TRUE}
+#Calculate new normalization factors
+sum(ProPD[ProPD$Accession == ProX, c(17:26)])
+sum(ProPD[ProPD$Accession == ProX, c(27:36)])
+sum(ProPD[ProPD$Accession == ProX, c(37:46)])
+```
+
+```{r, include=FALSE}
+#1 126 - 127C - 127N
+TMT126 <- ProPD[ProPD$Accession == ProX, c(17,27,37)] %>% unlist %>% mean
+TMT126sd <- ProPD[ProPD$Accession == ProX, c(17,27,37)] %>% unlist %>% sd
+TMT127N <- ProPD[ProPD$Accession == ProX, c(18,28,38)] %>% unlist %>% mean
+TMT127Nsd <- ProPD[ProPD$Accession == ProX, c(18,28,38)] %>% unlist %>% sd
+TMT127C <- ProPD[ProPD$Accession == ProX, c(19,29,39)] %>% unlist %>% mean
+TMT127Csd <- ProPD[ProPD$Accession == ProX, c(19,29,39)] %>% unlist %>% sd
+#2 128N - 128C - 129N
+TMT128N <- ProPD[ProPD$Accession == ProX, c(20,30,40)] %>% unlist %>% mean
+TMT128Nsd <- ProPD[ProPD$Accession == ProX, c(20,30,40)] %>% unlist %>% sd
+TMT128C <- ProPD[ProPD$Accession == ProX, c(21,31,41)] %>% unlist %>% mean
+TMT128Csd <- ProPD[ProPD$Accession == ProX, c(21,31,41)] %>% unlist %>% sd
+TMT129N <- ProPD[ProPD$Accession == ProX, c(22,32,42)] %>% unlist %>% mean
+TMT129Nsd <- ProPD[ProPD$Accession == ProX, c(22,32,42)] %>% unlist %>% sd
+#3 129C - 130C - 130N
+TMT129C <- ProPD[ProPD$Accession == ProX, c(23,33,43)] %>% unlist %>% mean
+TMT129Csd <- ProPD[ProPD$Accession == ProX, c(23,33,43)] %>% unlist %>% sd
+TMT130N <- ProPD[ProPD$Accession == ProX, c(24,34,44)] %>% unlist %>% mean
+TMT130Nsd <- ProPD[ProPD$Accession == ProX, c(24,34,44)] %>% unlist %>% sd
+TMT130C <- ProPD[ProPD$Accession == ProX, c(25,35,45)] %>% unlist %>% mean
+TMT130Csd <- ProPD[ProPD$Accession == ProX, c(25,35,45)] %>% unlist %>% sd
+
+#4 All
+channel <- c("126","127N","127C","128N","128C","129N","129C","130N","130C")
+threerep <- c(TMT126, TMT127N, TMT127C,TMT128N,TMT128C,TMT129N,TMT129C,TMT130N,TMT130C)
+threesd <- c(TMT126sd, TMT127Nsd, TMT127Csd,TMT128Nsd,TMT128Csd,TMT129Nsd,TMT129Csd,TMT130Nsd,TMT130Csd)
+strain = c(rep("Δmet6",3), rep("Δpfk2",3), rep("Δura2",3))
+geneKO <- data.frame(channel,threerep,threesd, strain)
+
+geneKO$channel <- factor(geneKO$channel,
+                         levels = c("126","127N","127C","128N","128C","129N","129C","130N","130C"))
+```
+Plotting the Met6 protein abundance profile
+```{r, include=TRUE}
+ggplot(geneKO) +
+  geom_bar( aes(x=channel, y=threerep,fill=strain), stat="identity",  alpha=0.85) +
+  geom_errorbar( aes(x=channel, ymin=threerep-threesd, ymax=threerep+threesd), width=0.2, colour="Black", alpha=0.9, size=0.5) +
+  ggtitle("Met6 protein abundance profile") +  xlab("Channel") + ylab("TMT RA (Based On S/N, 3 replicates)") + theme_classic()
+
+```
+
+
+
+__Pfk2__
+
+```{r, include=FALSE}
+
+ProX = "P16862"
+
+######Normalization
+F1N <- 100/(ProPD[ProPD$Accession == ProX, c(17:26)] %>% unlist %>% sum)
+F2N <- 100/(ProPD[ProPD$Accession == ProX, c(27:36)] %>% unlist %>% sum)
+F3N <- 100/(ProPD[ProPD$Accession == ProX, c(37:46)] %>% unlist %>% sum)
+#Check Factor
+sum(ProPD[ProPD$Accession == ProX, c(17:26)]*F1N)
+sum(ProPD[ProPD$Accession == ProX, c(27:36)]*F2N)
+sum(ProPD[ProPD$Accession == ProX, c(37:46)]*F3N)
+#Calculate new normalization factors
+for (i in 17:26) {
+  ProPD[ProPD$Accession == ProX, c(i)] <- ProPD[ProPD$Accession == ProX, c(i)]*F1N
+}
+for (i in 27:36) {
+  ProPD[ProPD$Accession == ProX, c(i)] <- ProPD[ProPD$Accession == ProX, c(i)]*F2N
+}
+for (i in 37:46) {
+  ProPD[ProPD$Accession == ProX, c(i)] <- ProPD[ProPD$Accession == ProX, c(i)]*F3N
+}
+```
+
+Check abundance after normalization:
+
+```{r, include=TRUE}
+#Calculate new normalization factors
+sum(ProPD[ProPD$Accession == ProX, c(17:26)])
+sum(ProPD[ProPD$Accession == ProX, c(27:36)])
+sum(ProPD[ProPD$Accession == ProX, c(37:46)])
+```
+
+```{r, include=FALSE}
+#1 126 - 127C - 127N
+TMT126 <- ProPD[ProPD$Accession == ProX, c(17,27,37)] %>% unlist %>% mean
+TMT126sd <- ProPD[ProPD$Accession == ProX, c(17,27,37)] %>% unlist %>% sd
+TMT127N <- ProPD[ProPD$Accession == ProX, c(18,28,38)] %>% unlist %>% mean
+TMT127Nsd <- ProPD[ProPD$Accession == ProX, c(18,28,38)] %>% unlist %>% sd
+TMT127C <- ProPD[ProPD$Accession == ProX, c(19,29,39)] %>% unlist %>% mean
+TMT127Csd <- ProPD[ProPD$Accession == ProX, c(19,29,39)] %>% unlist %>% sd
+#2 128N - 128C - 129N
+TMT128N <- ProPD[ProPD$Accession == ProX, c(20,30,40)] %>% unlist %>% mean
+TMT128Nsd <- ProPD[ProPD$Accession == ProX, c(20,30,40)] %>% unlist %>% sd
+TMT128C <- ProPD[ProPD$Accession == ProX, c(21,31,41)] %>% unlist %>% mean
+TMT128Csd <- ProPD[ProPD$Accession == ProX, c(21,31,41)] %>% unlist %>% sd
+TMT129N <- ProPD[ProPD$Accession == ProX, c(22,32,42)] %>% unlist %>% mean
+TMT129Nsd <- ProPD[ProPD$Accession == ProX, c(22,32,42)] %>% unlist %>% sd
+#3 129C - 130C - 130N
+TMT129C <- ProPD[ProPD$Accession == ProX, c(23,33,43)] %>% unlist %>% mean
+TMT129Csd <- ProPD[ProPD$Accession == ProX, c(23,33,43)] %>% unlist %>% sd
+TMT130N <- ProPD[ProPD$Accession == ProX, c(24,34,44)] %>% unlist %>% mean
+TMT130Nsd <- ProPD[ProPD$Accession == ProX, c(24,34,44)] %>% unlist %>% sd
+TMT130C <- ProPD[ProPD$Accession == ProX, c(25,35,45)] %>% unlist %>% mean
+TMT130Csd <- ProPD[ProPD$Accession == ProX, c(25,35,45)] %>% unlist %>% sd
+
+#4 All
+channel <- c("126","127N","127C","128N","128C","129N","129C","130N","130C")
+threerep <- c(TMT126, TMT127N, TMT127C,TMT128N,TMT128C,TMT129N,TMT129C,TMT130N,TMT130C)
+threesd <- c(TMT126sd, TMT127Nsd, TMT127Csd,TMT128Nsd,TMT128Csd,TMT129Nsd,TMT129Csd,TMT130Nsd,TMT130Csd)
+strain = c(rep("Δmet6",3), rep("Δpfk2",3), rep("Δura2",3))
+geneKO <- data.frame(channel,threerep,threesd, strain)
+
+geneKO$channel <- factor(geneKO$channel,
+                         levels = c("126","127N","127C","128N","128C","129N","129C","130N","130C"))
+```
+Plotting the Pfk2 protein abundance profile
+```{r}
+ggplot(geneKO) +
+  geom_bar( aes(x=channel, y=threerep,fill=strain), stat="identity",  alpha=0.85) +
+  geom_errorbar( aes(x=channel, ymin=threerep-threesd, ymax=threerep+threesd), width=0.2, colour="Black", alpha=0.9, size=0.5) +
+  ggtitle("Pfk2 protein abundance profile") +  xlab("Channel") + ylab("TMT RA (Based On S/N, 3 replicates)") + theme_classic()
+```
+
+
+
+__Ura2__
+
+```{r, include=FALSE}
+ProX = "P07259"
+###Normalization
+F1N <- 100/(ProPD[ProPD$Accession == ProX, c(17:26)] %>% unlist %>% sum)
+F2N <- 100/(ProPD[ProPD$Accession == ProX, c(27:36)] %>% unlist %>% sum)
+F3N <- 100/(ProPD[ProPD$Accession == ProX, c(37:46)] %>% unlist %>% sum)
+#Check Factor
+sum(ProPD[ProPD$Accession == ProX, c(17:26)]*F1N)
+sum(ProPD[ProPD$Accession == ProX, c(27:36)]*F2N)
+sum(ProPD[ProPD$Accession == ProX, c(37:46)]*F3N)
+#Calculate new normalization factors
+for (i in 17:26) {
+  ProPD[ProPD$Accession == ProX, c(i)] <- ProPD[ProPD$Accession == ProX, c(i)]*F1N
+}
+for (i in 27:36) {
+  ProPD[ProPD$Accession == ProX, c(i)] <- ProPD[ProPD$Accession == ProX, c(i)]*F2N
+}
+for (i in 37:46) {
+  ProPD[ProPD$Accession == ProX, c(i)] <- ProPD[ProPD$Accession == ProX, c(i)]*F3N
+}
+```
+
+Check abundance after normalization:
+
+```{r, include=TRUE}
+#Calculate new normalization factors
+sum(ProPD[ProPD$Accession == ProX, c(17:26)])
+sum(ProPD[ProPD$Accession == ProX, c(27:36)])
+sum(ProPD[ProPD$Accession == ProX, c(37:46)])
+```
+
+```{r, include=FALSE}
+#1 126 - 127C - 127N
+TMT126 <- ProPD[ProPD$Accession == ProX, c(17,27,37)] %>% unlist %>% mean
+TMT126sd <- ProPD[ProPD$Accession == ProX, c(17,27,37)] %>% unlist %>% sd
+TMT127N <- ProPD[ProPD$Accession == ProX, c(18,28,38)] %>% unlist %>% mean
+TMT127Nsd <- ProPD[ProPD$Accession == ProX, c(18,28,38)] %>% unlist %>% sd
+TMT127C <- ProPD[ProPD$Accession == ProX, c(19,29,39)] %>% unlist %>% mean
+TMT127Csd <- ProPD[ProPD$Accession == ProX, c(19,29,39)] %>% unlist %>% sd
+#2 128N - 128C - 129N
+TMT128N <- ProPD[ProPD$Accession == ProX, c(20,30,40)] %>% unlist %>% mean
+TMT128Nsd <- ProPD[ProPD$Accession == ProX, c(20,30,40)] %>% unlist %>% sd
+TMT128C <- ProPD[ProPD$Accession == ProX, c(21,31,41)] %>% unlist %>% mean
+TMT128Csd <- ProPD[ProPD$Accession == ProX, c(21,31,41)] %>% unlist %>% sd
+TMT129N <- ProPD[ProPD$Accession == ProX, c(22,32,42)] %>% unlist %>% mean
+TMT129Nsd <- ProPD[ProPD$Accession == ProX, c(22,32,42)] %>% unlist %>% sd
+#3 129C - 130C - 130N
+TMT129C <- ProPD[ProPD$Accession == ProX, c(23,33,43)] %>% unlist %>% mean
+TMT129Csd <- ProPD[ProPD$Accession == ProX, c(23,33,43)] %>% unlist %>% sd
+TMT130N <- ProPD[ProPD$Accession == ProX, c(24,34,44)] %>% unlist %>% mean
+TMT130Nsd <- ProPD[ProPD$Accession == ProX, c(24,34,44)] %>% unlist %>% sd
+TMT130C <- ProPD[ProPD$Accession == ProX, c(25,35,45)] %>% unlist %>% mean
+TMT130Csd <- ProPD[ProPD$Accession == ProX, c(25,35,45)] %>% unlist %>% sd
+
+#4 All
+channel <- c("126","127N","127C","128N","128C","129N","129C","130N","130C")
+threerep <- c(TMT126, TMT127N, TMT127C,TMT128N,TMT128C,TMT129N,TMT129C,TMT130N,TMT130C)
+threesd <- c(TMT126sd, TMT127Nsd, TMT127Csd,TMT128Nsd,TMT128Csd,TMT129Nsd,TMT129Csd,TMT130Nsd,TMT130Csd)
+strain = c(rep("Δmet6",3), rep("Δpfk2",3), rep("Δura2",3))
+geneKO <- data.frame(channel,threerep,threesd, strain)
+
+geneKO$channel <- factor(geneKO$channel,
+                         levels = c("126","127N","127C","128N","128C","129N","129C","130N","130C"))
+
+```
+
+Plotting the Ura2 protein abundance profile
+
+```{r}
+ggplot(geneKO) +
+  geom_bar( aes(x=channel, y=threerep,fill=strain), stat="identity",  alpha=0.85) +
+  geom_errorbar( aes(x=channel, ymin=threerep-threesd, ymax=threerep+threesd), width=0.2, colour="Black", alpha=0.9, size=0.5) +
+  ggtitle("Ura2 protein abundance profile") +  xlab("Channel") + ylab("TMT RA (Based On S/N, 3 replicates)") + theme_classic()
+```
+
+
+
+## Peptide level TKO data
+
+
+```{r,include=FALSE}
+pepPD <- read.csv("Lumos MS3 - NNNS - Strict - Pep.csv")
+```
+
+Despite normalization, the ratio of the relative abundance of a TKO protein in the knockout is not zero due to the presence of noise1. Re-analysed data shows a similar trend to Paulo’s study; however, the noise in 128N, 128C, and 129N channels are higher compared to the author’s result.
+Among the six peptides used in Paulo's study, only two peptides (SSPDENSTLLSNDSISLK and AAEENFNADDK) were detected in this re-analysis. Both Proteome Discoverer 2.5 (SequestHT) and MaxQuant show similarly identified peptides, but further analysis is needed to be carried out to find exact percent of overlap between the two softwares. In this re-analysis, peptide sequences were chosen if they appeared in three of replicates and among nine channels. Reporter abundances for chosen peptides are likely to follow similar trends with their related protein, but they show a higher variance. 
+
+
+
+```{r}
+pepPD[pepPD$Annotated.Sequence == "[R].AAEENFNADDK.[T]", c(17:45)]
+```
+[R].AAEENFNADDK.[T] results in all NA value in abundance.
+```{r}
+pepPD[pepPD$Annotated.Sequence == "[R].SSPDENSTLLSNDSISLK.[I]", c(17:45)]
+```
+
+[R].SSPDENSTLLSNDSISLK.[I]  results in abundance value in replicate 2 and 3.
+
+Both Proteome Discoverer 2.5 (SequestHT) and MaxQuant show similarly identified peptides, but further analysis is needed to be carried out to find exact percent of overlap between the two softwares. In this re-analysis, peptide sequences were chosen if they appeared in three of replicates and among nine channels. Reporter abundances for chosen peptides are likely to follow similar trends with their related protein, but they show a higher variance. 
+
+```{r,include=FALSE}
+pepX = "[R].SSPDENSTLLSNDSISLK.[I]"
+
+
+#1 126 - 127C - 127N
+
+TMT126 <- pepPD[pepPD$Annotated.Sequence == pepX, c(27,37)] %>% unlist %>% mean
+TMT126sd <- pepPD[pepPD$Annotated.Sequence == pepX, c(27,37)] %>% unlist %>% sd
+TMT127N <- pepPD[pepPD$Annotated.Sequence == pepX, c(28,38)] %>% unlist %>% mean
+TMT127Nsd <- pepPD[pepPD$Annotated.Sequence == pepX, c(28,38)] %>% unlist %>% sd
+TMT127C <- pepPD[pepPD$Annotated.Sequence == pepX, c(29,39)] %>% unlist %>% mean
+TMT127Csd <- pepPD[pepPD$Annotated.Sequence == pepX, c(29,39)] %>% unlist %>% sd
+#2 128N - 128C - 129N
+TMT128N <- pepPD[pepPD$Annotated.Sequence == pepX, c(30,40)] %>% unlist %>% mean
+TMT128Nsd <- pepPD[pepPD$Annotated.Sequence == pepX, c(30,40)] %>% unlist %>% sd
+TMT128C <- pepPD[pepPD$Annotated.Sequence == pepX, c(31,41)] %>% unlist %>% mean
+TMT128Csd <- pepPD[pepPD$Annotated.Sequence == pepX, c(31,41)] %>% unlist %>% sd
+TMT129N <- pepPD[pepPD$Annotated.Sequence == pepX, c(32,42)] %>% unlist %>% mean
+TMT129Nsd <- pepPD[pepPD$Annotated.Sequence == pepX, c(32,42)] %>% unlist %>% sd
+#3 129C - 130C - 130N
+TMT129C <- pepPD[pepPD$Annotated.Sequence == pepX, c(33,43)] %>% unlist %>% mean
+TMT129Csd <- pepPD[pepPD$Annotated.Sequence == pepX, c(33,43)] %>% unlist %>% sd
+TMT130N <- pepPD[pepPD$Annotated.Sequence == pepX, c(34,44)] %>% unlist %>% mean
+TMT130Nsd <- pepPD[pepPD$Annotated.Sequence == pepX, c(34,44)] %>% unlist %>% sd
+TMT130C <- pepPD[pepPD$Annotated.Sequence == pepX, c(35,45)] %>% unlist %>% mean
+TMT130Csd <- pepPD[pepPD$Annotated.Sequence == pepX, c(35,45)] %>% unlist %>% sd
+
+#4 All
+channel <- c("126","127N","127C","128N","128C","129N","129C","130N","130C")
+threerep <- c(TMT126, TMT127N, TMT127C,TMT128N,TMT128C,TMT129N,TMT129C,TMT130N,TMT130C)
+threesd <- c(TMT126sd, TMT127Nsd, TMT127Csd,TMT128Nsd,TMT128Csd,TMT129Nsd,TMT129Csd,TMT130Nsd,TMT130Csd)
+strain = c(rep("Δmet6",3), rep("Δpfk2",3), rep("Δura2",3))
+Met6KO <- data.frame(channel,threerep,threesd, strain)
+
+Met6KO$channel <- factor(Met6KO$channel,
+                         levels = c("126","127N","127C","128N","128C","129N","129C","130N","130C"))
+strain = c(rep("met6",3), rep("pfk2",3), rep("ura2",3))
+```
+Plotting
+```{r,include=TRUE}
+ggplot(Met6KO) +
+  geom_bar( aes(x=channel, y=threerep,fill=strain), stat="identity",  alpha=0.85) +
+  geom_errorbar( aes(x=channel, ymin=threerep-threesd, ymax=threerep+threesd), width=0.2, colour="Black", alpha=0.9, size=0.5) +
+  ggtitle(pepX, "of Pfk2") + xlab("Channel") + ylab("Mean Reporter Abundance (Based On S/N, 3 replicates)")+ theme_classic()
+
+```
+
+
+
+
+Instead, other peptides were choosen based on their abundance in all TMT channels to evaluate their correspoding protein. 
+
+
+__Met6__
+Peptide VASIDEK of Met6
+```{r, include=FALSE}
+### Met6
+
+pepX = "[R].VASIDEK.[M]"
+#1 126 - 127C - 127N
+
+TMT126 <- pepPD[pepPD$Annotated.Sequence == pepX, c(17,27,37)] %>% unlist %>% mean
+TMT126sd <- pepPD[pepPD$Annotated.Sequence == pepX, c(17,27,37)] %>% unlist %>% sd
+TMT127N <- pepPD[pepPD$Annotated.Sequence == pepX, c(18,28,38)] %>% unlist %>% mean
+TMT127Nsd <- pepPD[pepPD$Annotated.Sequence == pepX, c(18,28,38)] %>% unlist %>% sd
+TMT127C <- pepPD[pepPD$Annotated.Sequence == pepX, c(19,29,39)] %>% unlist %>% mean
+TMT127Csd <- pepPD[pepPD$Annotated.Sequence == pepX, c(19,29,39)] %>% unlist %>% sd
+#2 128N - 128C - 129N
+TMT128N <- pepPD[pepPD$Annotated.Sequence == pepX, c(20,30,40)] %>% unlist %>% mean
+TMT128Nsd <- pepPD[pepPD$Annotated.Sequence == pepX, c(20,30,40)] %>% unlist %>% sd
+TMT128C <- pepPD[pepPD$Annotated.Sequence == pepX, c(21,31,41)] %>% unlist %>% mean
+TMT128Csd <- pepPD[pepPD$Annotated.Sequence == pepX, c(21,31,41)] %>% unlist %>% sd
+TMT129N <- pepPD[pepPD$Annotated.Sequence == pepX, c(22,32,42)] %>% unlist %>% mean
+TMT129Nsd <- pepPD[pepPD$Annotated.Sequence == pepX, c(22,32,42)] %>% unlist %>% sd
+#3 129C - 130C - 130N
+TMT129C <- pepPD[pepPD$Annotated.Sequence == pepX, c(23,33,43)] %>% unlist %>% mean
+TMT129Csd <- pepPD[pepPD$Annotated.Sequence == pepX, c(23,33,43)] %>% unlist %>% sd
+TMT130N <- pepPD[pepPD$Annotated.Sequence == pepX, c(24,34,44)] %>% unlist %>% mean
+TMT130Nsd <- pepPD[pepPD$Annotated.Sequence == pepX, c(24,34,44)] %>% unlist %>% sd
+TMT130C <- pepPD[pepPD$Annotated.Sequence == pepX, c(25,35,45)] %>% unlist %>% mean
+TMT130Csd <- pepPD[pepPD$Annotated.Sequence == pepX, c(25,35,45)] %>% unlist %>% sd
+
+#4 All
+channel <- c("126","127N","127C","128N","128C","129N","129C","130N","130C")
+threerep <- c(TMT126, TMT127N, TMT127C,TMT128N,TMT128C,TMT129N,TMT129C,TMT130N,TMT130C)
+threesd <- c(TMT126sd, TMT127Nsd, TMT127Csd,TMT128Nsd,TMT128Csd,TMT129Nsd,TMT129Csd,TMT130Nsd,TMT130Csd)
+strain = c(rep("Δmet6",3), rep("Δpfk2",3), rep("Δura2",3))
+Met6KO <- data.frame(channel,threerep,threesd, strain)
+
+Met6KO$channel <- factor(Met6KO$channel,
+                         levels = c("126","127N","127C","128N","128C","129N","129C","130N","130C"))
+strain = c(rep("met6",3), rep("pfk2",3), rep("ura2",3))
+```
+Plotting
+```{r}
+ggplot(Met6KO) +
+  geom_bar( aes(x=channel, y=threerep,fill=strain), stat="identity",  alpha=0.85) +
+  geom_errorbar( aes(x=channel, ymin=threerep-threesd, ymax=threerep+threesd), width=0.2, colour="Black", alpha=0.9, size=0.5) +
+  ggtitle(pepX, "of Met6") + xlab("Channel") + ylab("Mean Reporter Abundance (Based On S/N, 3 replicates)")+ theme_classic()
+```
+
+
+
+__Pfk2__
+Peptide AIDYVEATANSHSR of Pfk2
+```{r, include=FALSE}
+### Pfk2
+
+pepX = "[K].AIDYVEATANSHSR.[A]"
+
+
+#1 126 - 127C - 127N
+
+TMT126 <- pepPD[pepPD$Annotated.Sequence == pepX, c(17,27,37)] %>% unlist %>% mean
+TMT126sd <- pepPD[pepPD$Annotated.Sequence == pepX, c(17,27,37)] %>% unlist %>% sd
+TMT127N <- pepPD[pepPD$Annotated.Sequence == pepX, c(18,28,38)] %>% unlist %>% mean
+TMT127Nsd <- pepPD[pepPD$Annotated.Sequence == pepX, c(18,28,38)] %>% unlist %>% sd
+TMT127C <- pepPD[pepPD$Annotated.Sequence == pepX, c(19,29,39)] %>% unlist %>% mean
+TMT127Csd <- pepPD[pepPD$Annotated.Sequence == pepX, c(19,29,39)] %>% unlist %>% sd
+#2 128N - 128C - 129N
+TMT128N <- pepPD[pepPD$Annotated.Sequence == pepX, c(20,30,40)] %>% unlist %>% mean
+TMT128Nsd <- pepPD[pepPD$Annotated.Sequence == pepX, c(20,30,40)] %>% unlist %>% sd
+TMT128C <- pepPD[pepPD$Annotated.Sequence == pepX, c(21,31,41)] %>% unlist %>% mean
+TMT128Csd <- pepPD[pepPD$Annotated.Sequence == pepX, c(21,31,41)] %>% unlist %>% sd
+TMT129N <- pepPD[pepPD$Annotated.Sequence == pepX, c(22,32,42)] %>% unlist %>% mean
+TMT129Nsd <- pepPD[pepPD$Annotated.Sequence == pepX, c(22,32,42)] %>% unlist %>% sd
+#3 129C - 130C - 130N
+TMT129C <- pepPD[pepPD$Annotated.Sequence == pepX, c(23,33,43)] %>% unlist %>% mean
+TMT129Csd <- pepPD[pepPD$Annotated.Sequence == pepX, c(23,33,43)] %>% unlist %>% sd
+TMT130N <- pepPD[pepPD$Annotated.Sequence == pepX, c(24,34,44)] %>% unlist %>% mean
+TMT130Nsd <- pepPD[pepPD$Annotated.Sequence == pepX, c(24,34,44)] %>% unlist %>% sd
+TMT130C <- pepPD[pepPD$Annotated.Sequence == pepX, c(25,35,45)] %>% unlist %>% mean
+TMT130Csd <- pepPD[pepPD$Annotated.Sequence == pepX, c(25,35,45)] %>% unlist %>% sd
+
+#4 All
+channel <- c("126","127N","127C","128N","128C","129N","129C","130N","130C")
+threerep <- c(TMT126, TMT127N, TMT127C,TMT128N,TMT128C,TMT129N,TMT129C,TMT130N,TMT130C)
+threesd <- c(TMT126sd, TMT127Nsd, TMT127Csd,TMT128Nsd,TMT128Csd,TMT129Nsd,TMT129Csd,TMT130Nsd,TMT130Csd)
+strain = c(rep("Δmet6",3), rep("Δpfk2",3), rep("Δura2",3))
+Met6KO <- data.frame(channel,threerep,threesd, strain)
+
+Met6KO$channel <- factor(Met6KO$channel,
+                         levels = c("126","127N","127C","128N","128C","129N","129C","130N","130C"))
+strain = c(rep("met6",3), rep("pfk2",3), rep("ura2",3))
+
+```
+Plotting
+```{r, include=TRUE}
+ggplot(Met6KO) +
+  geom_bar( aes(x=channel, y=threerep,fill=strain), stat="identity",  alpha=0.85) +
+  geom_errorbar( aes(x=channel, ymin=threerep-threesd, ymax=threerep+threesd), width=0.2, colour="Black", alpha=0.9, size=0.5) +
+  ggtitle(pepX, "of Pfk2") + xlab("Channel") + ylab("Mean Reporter Abundance (Based On S/N, 3 replicates)")+ theme_classic()
+```
+
+
+
+__Ura2__
+Peptide DDDDQK of Ura2
+```{r, include=FALSE}
+### Ura2
+
+pepX = "[K].DDDDQK.[S]"
+
+
+#1 126 - 127C - 127N
+
+TMT126 <- pepPD[pepPD$Annotated.Sequence == pepX, c(17,27,37)] %>% unlist %>% mean
+TMT126sd <- pepPD[pepPD$Annotated.Sequence == pepX, c(17,27,37)] %>% unlist %>% sd
+TMT127N <- pepPD[pepPD$Annotated.Sequence == pepX, c(18,28,38)] %>% unlist %>% mean
+TMT127Nsd <- pepPD[pepPD$Annotated.Sequence == pepX, c(18,28,38)] %>% unlist %>% sd
+TMT127C <- pepPD[pepPD$Annotated.Sequence == pepX, c(19,29,39)] %>% unlist %>% mean
+TMT127Csd <- pepPD[pepPD$Annotated.Sequence == pepX, c(19,29,39)] %>% unlist %>% sd
+#2 128N - 128C - 129N
+TMT128N <- pepPD[pepPD$Annotated.Sequence == pepX, c(20,30,40)] %>% unlist %>% mean
+TMT128Nsd <- pepPD[pepPD$Annotated.Sequence == pepX, c(20,30,40)] %>% unlist %>% sd
+TMT128C <- pepPD[pepPD$Annotated.Sequence == pepX, c(21,31,41)] %>% unlist %>% mean
+TMT128Csd <- pepPD[pepPD$Annotated.Sequence == pepX, c(21,31,41)] %>% unlist %>% sd
+TMT129N <- pepPD[pepPD$Annotated.Sequence == pepX, c(22,32,42)] %>% unlist %>% mean
+TMT129Nsd <- pepPD[pepPD$Annotated.Sequence == pepX, c(22,32,42)] %>% unlist %>% sd
+#3 129C - 130C - 130N
+TMT129C <- pepPD[pepPD$Annotated.Sequence == pepX, c(23,33,43)] %>% unlist %>% mean
+TMT129Csd <- pepPD[pepPD$Annotated.Sequence == pepX, c(23,33,43)] %>% unlist %>% sd
+TMT130N <- pepPD[pepPD$Annotated.Sequence == pepX, c(24,34,44)] %>% unlist %>% mean
+TMT130Nsd <- pepPD[pepPD$Annotated.Sequence == pepX, c(24,34,44)] %>% unlist %>% sd
+TMT130C <- pepPD[pepPD$Annotated.Sequence == pepX, c(25,35,45)] %>% unlist %>% mean
+TMT130Csd <- pepPD[pepPD$Annotated.Sequence == pepX, c(25,35,45)] %>% unlist %>% sd
+
+#4 All
+channel <- c("126","127N","127C","128N","128C","129N","129C","130N","130C")
+threerep <- c(TMT126, TMT127N, TMT127C,TMT128N,TMT128C,TMT129N,TMT129C,TMT130N,TMT130C)
+threesd <- c(TMT126sd, TMT127Nsd, TMT127Csd,TMT128Nsd,TMT128Csd,TMT129Nsd,TMT129Csd,TMT130Nsd,TMT130Csd)
+strain = c(rep("Δmet6",3), rep("Δpfk2",3), rep("Δura2",3))
+Met6KO <- data.frame(channel,threerep,threesd, strain)
+
+Met6KO$channel <- factor(Met6KO$channel,
+                         levels = c("126","127N","127C","128N","128C","129N","129C","130N","130C"))
+strain = c(rep("met6",3), rep("pfk2",3), rep("ura2",3))
+```
+Plotting
+```{r, include=TRUE}
+ggplot(Met6KO) +
+  geom_bar( aes(x=channel, y=threerep,fill=strain), stat="identity",  alpha=0.85) +
+  geom_errorbar( aes(x=channel, ymin=threerep-threesd, ymax=threerep+threesd), width=0.2, colour="Black", alpha=0.9, size=0.5) +
+  ggtitle(pepX, "of Ura2") + xlab("Channel") + ylab("Mean Reporter Abundance (Based On S/N, 3 replicates)")+ theme_classic()
+```
+
+
+
+# Comparing signal-to-noise measurements between two mass spectrometer platforms (Orbitrap Fusion Lumos and Orbitrap Fusion)
+
+Based on the reporter abundance, the signal-to-noise measurements can be used to compare the efficiency of different mass spectrometers. In Paulo et al. study, the comparison was performed between Fusion Lumos and Fusion Classic. Their results showed that the Fusion Lumos provide a 4-fold for the average summed signal-to-noise (S:N) compared to the Fusion Classic.
+In this re-analysis, PSMs were filtered out following the author’s supplementary settings: 
+(1) MS3 spectra with TMT reporter summed signal-to-noise ratio that is less than 100, 
+(2) isolation specificity of ≥ 0.7. 
+
+
+
+```{r, include=FALSE}
+#Load input
+Fusion <- read.csv("Fusion MS3 - NNNS - Strict - PSM.csv")
+Lumos <- read.csv("Lumos MS3 - NNNS - Strict - PSM.csv")
+```
+PSMs with isolation specificity of < 0.7 were filtered out.
+
+```{r, include=FALSE}
+#Filtered out isolation specificity of < 0.7
+Fusion <- Fusion[Fusion$Isolation.Interference....>=0.7,]
+Lumos <- Lumos[Lumos$Isolation.Interference....>=0.7,]
+```
+
+__Fusion__
+For Orbitrap Fusion, three raw files m06677, m06679, m06681 were used.
+```{r, include=FALSE}
+###Fusion
+
+Fusion1 <- Fusion[Fusion$Spectrum.File=="m06677.raw",]
+Fusion2 <- Fusion[Fusion$Spectrum.File=="m06679.raw",]
+Fusion3 <- Fusion[Fusion$Spectrum.File=="m06681.raw",]
+```
+
+MS3 spectra with TMT reporter summed signal-to-noise ratio that is less than 100 were filtered out. 
+```{r, include=FALSE}
+PSMF1 <- rowSums(subset(Fusion1, select = c(31:39)), na.rm = TRUE)
+PSMF1 <- PSMF1[which(PSMF1>=100)]
+PSMF2 <- rowSums(subset(Fusion2, select = c(31:39)), na.rm = TRUE)
+PSMF2 <- PSMF2[which(PSMF2>=100)]
+PSMF3 <- rowSums(subset(Fusion3, select = c(31:39)), na.rm = TRUE)
+PSMF3 <- PSMF3[which(PSMF3>=100)]
+
+```
+
+__Lumos__
+
+For Orbitrap Fusion Lumos, three rawfile L00760, L00762, L00764 were used.
+
+```{r, include=FALSE}
+Lumos1 <- Lumos[Lumos$Spectrum.File=="L00760.raw",]
+Lumos2 <- Lumos[Lumos$Spectrum.File=="L00762.raw",]
+Lumos3 <- Lumos[Lumos$Spectrum.File=="L00764.raw",]
+```
+
+MS3 spectra with TMT reporter summed signal-to-noise ratio that is less than 100 were filtered out. 
+
+```{r, include=FALSE}
+PSML1 <- rowSums(subset(Lumos1, select = c(31:39)), na.rm = TRUE)
+PSML1 <- PSML1[which(PSML1>=100)]
+PSML2 <- rowSums(subset(Lumos2, select = c(31:39)), na.rm = TRUE)
+PSML2 <- PSML2[which(PSML2>=100)]
+PSML3 <- rowSums(subset(Lumos3, select = c(31:39)), na.rm = TRUE)
+PSML3 <- PSML3[which(PSML3>=100)]
+```
+
+
+
+
+```{r}
+### Plotting
+insfulu <- data.frame(Ins = c(PSMF1, PSMF2, PSMF3, PSML1, PSML2, PSML3),
+                      TMTSN = factor(c(rep("F1", length(PSMF1)), 
+                                       rep("F2", length(PSMF2)), 
+                                       rep("F3", length(PSMF3)), 
+                                       rep("L1",length(PSML1)),
+                                       rep("L2",length(PSML2)),
+                                       rep("L3",length(PSML3)))),
+                      In = factor(c(rep("Fusion", c(length(PSMF1)+length(PSMF2)+length(PSMF3))),
+                                    rep("Lumos", c(length(PSML1)+length(PSML2) + length(PSML3))))))
+```
+
+```{r}
+plot(insfulu$Ins~insfulu$TMTSN, 
+     xlab = "Fusion vs Lumos", ylab = expression("TMT" [sum(S:N)]), ylim=c(0,2000))
+```
+
+
+The results also show an increase in summed signal-to-noise (S:N) of peptides quantified by Fusion Lumos, but with only a 1.6-fold change.
+
+```{r}
+mean(c(median(PSML1),median(PSML2),median(PSML3)))/mean(c(median(PSMF1),median(PSMF2),median(PSMF3)))
+
+mean(c(mean(PSML1),mean(PSML2),mean(PSML3)))/mean(c(mean(PSMF1),mean(PSMF2),mean(PSMF3)))
+
+```
+
+This was lower compared to the author’s findings. Removing the filter for Fusion Classic would reveal a similar trend with the Paulo’s study, but their graph indicates that the filters were also applied to Fusion Classic run (the lowest whisker of Fusion 1,2,3 are in the same value of those of Lumos 1,2,3).
+The variance may occur due to: 
+(1) parameters settings in the PD2.5 as not all the parameters were provided by the authors (in this analysis, these unprovided parameters were set as default or followed Robitaille et al.2); 
+(2) searching engines (despite both analyses were performed by SequestHT, they still differ in version (2016 vs 2020) and commercial/in house software which can be a source of variance).
+
+
+
+# Assessing interference between MS2-only and SPS-MS3 TMT quantification
+
+Ion interference can be compared between MS2 and SPS-MS3-based peptide quantification using TKO. In this study, Met6 was examined using the interference-free index (IFI), which was calculated as the difference from one of the average TMT signal-to-noise value from the KO channels (for Met6: 126, 127N, and 127C) divided by the average TMT signal-to-noise of the other six channels. The lower score indicates a greater signal for a given TKO peptide, that greater interference is detected for the KO channel than the non-KO channel. 
+
+```{r, include=FALSE}
+#Load file
+
+LMS2 <- read.csv("Lumos MS2 - NNNS - Strict - PSM.csv")
+LMS3 <- read.csv("Lumos MS3 - NNNS - Strict - PSM.csv")
+
+proIFI = "P05694"
+
+LMS2_1 <- LMS2[LMS2$Spectrum.File=="L00761.raw"&LMS2$Master.Protein.Accessions==proIFI&LMS2$Isolation.Interference....>0.7,]
+LMS2_2 <- LMS2[LMS2$Spectrum.File=="L00763.raw"&LMS2$Master.Protein.Accessions==proIFI&LMS2$Isolation.Interference....>0.7,]
+LMS2_3 <- LMS2[LMS2$Spectrum.File=="L00765.raw"&LMS2$Master.Protein.Accessions==proIFI&LMS2$Isolation.Interference....>0.7,]
+
+LMS3_1 <- LMS3[LMS3$Spectrum.File=="L00760.raw"&LMS3$Master.Protein.Accessions==proIFI&LMS3$Isolation.Interference....>0.7,]
+LMS3_2 <- LMS3[LMS3$Spectrum.File=="L00762.raw"&LMS3$Master.Protein.Accessions==proIFI&LMS3$Isolation.Interference....>0.7,]
+LMS3_3 <- LMS3[LMS3$Spectrum.File=="L00764.raw"&LMS3$Master.Protein.Accessions==proIFI&LMS3$Isolation.Interference....>0.7,]
+
+
+```
+
+__MS2__
+```{r, include=FALSE}
+###MS2 Lumos
+#Find IFI
+MS2.1 <- vector("numeric",nrow(LMS2_1))
+for (i in 1:nrow(LMS2_1)) {
+  c1 <- LMS2_1[i, c(31:33)] %>% unlist %>% mean
+  d1 <- LMS2_1[i, c(34:39)] %>% unlist %>% mean
+  MS2.1[i] <- 1- c1/d1
+}
+MS2.1
+
+MS2.2 <- vector("numeric",nrow(LMS2_2))
+for (i in 1:nrow(LMS2_2)) {
+  c2 <- LMS2_2[i, c(31:33)] %>% unlist %>% mean
+  d2 <- LMS2_2[i, c(34:39)] %>% unlist %>% mean
+  MS2.2[i] <- 1- c2/d2
+}
+MS2.2
+
+MS2.3 <- vector("numeric",nrow(LMS2_3))
+for (i in 1:nrow(LMS2_3)) {
+  c3 <- LMS2_3[i, c(31:33)] %>% unlist %>% mean
+  d3 <- LMS2_3[i, c(34:39)] %>% unlist %>% mean
+  MS2.3[i] <- 1- c3/d3
+}
+MS2.3
+
+
+```
+
+
+__SPS-MS3__
+
+```{r, include=FALSE}
+###MS3 Lumos
+SPS1 <- vector("numeric",nrow(LMS3_1))
+for (i in 1:nrow(LMS3_1)) {
+  a1 <- LMS3_1[i, c(31:33)] %>% unlist %>% mean
+  b1 <- LMS3_1[i, c(34:39)] %>% unlist %>% mean
+  SPS1[i] <- 1- a1/b1
+}
+SPS1 <- na.omit(SPS1)
+SPS1
+
+
+SPS2 <- vector("numeric",nrow(LMS3_2))
+for (i in 1:nrow(LMS3_2)) {
+  a2 <- LMS3_2[i, c(31:33)] %>% unlist %>% mean
+  b2 <- LMS3_2[i, c(34:39)] %>% unlist %>% mean
+  SPS2[i] <- 1- a2/b2
+}
+SPS2 <- na.omit(SPS2)
+SPS2
+
+SPS3 <- vector("numeric",nrow(LMS3_3))
+for (i in 1:nrow(LMS3_3)) {
+  a3 <- LMS3_3[i, c(31:33)] %>% unlist %>% mean
+  b3 <- LMS3_3[i, c(34:39)] %>% unlist %>% mean
+  SPS3[i] <- 1- a3/b3
+}
+SPS3 <- na.omit(SPS2)
+SPS3
+
+
+```
+
+
+
+```{r}
+### Create daraframe
+IFItotal <- data.frame(IFI = c(MS2.1, MS2.2, MS2.3, SPS1,SPS2,SPS3), 
+                       SPS = factor(c(rep("M1", length(MS2.1)), 
+                                      rep("M2", length(MS2.2)), 
+                                      rep("M3", length(MS2.3)), 
+                                      rep("S1",length(SPS1)),
+                                      rep("S2",length(SPS2)),
+                                      rep("S3",length(SPS3)))))
+
+```
+
+```{r}
+#Plotting
+p <- ggplot(IFItotal, aes(x=SPS, y=IFI)) + 
+  geom_dotplot(binaxis='y', stackdir='center',
+               stackratio=0.7, dotsize=0.7) + ggtitle("All quantified Met6 peptides") + ylab("Interference Free Index - IFI") + xlab("MS2 vs SPS-MS3") + ylim(0,1)
+p + stat_summary(fun=median, geom="point", shape=20,
+                 size=5, color="blue") + stat_summary(fun=mean, geom="point", shape=18,
+                                                      size=5, color="red") + theme_light()
+
+```
+
+In both plots, the data points in MS2 were more widely distributed than those of the SPS-MS3, which indicate the interference from co-isolated peptide in various intensities of MS2. However, re-analysis shows a smaller number of data points in SPS-MS3 than that of Paulo’s study, which leads to a less clear efficiency of SPS-MS3. As this disparity results from distinct analysis procedures, other parameter settings and search engine are needed to be performed to reproduce the author’s study.
+
+
+
+# TMT labeling efficiency
+##Underlabeling
+
+According to Zecha et al.3, modified peptide sequences can be classified into three categories for underlabeling analysis: (1) “fully labeled”, TMT on all lysine side chains and free; (2) “partially labeled”, contained at least one TMT but were not fully labeled; and (3) “not labeled”, peptides that did not bear any TMT. 
+For underlabeling evaluation in this re-analysis, the TMT10 was specified as variable modification on lysine and N-termini (or as Dynamic Modification setting in PD2.5). For all searches, carbamidomethylated cysteine was set as a static modification and oxidation of methionine and N-terminal protein acetylation as dynamic modifications.
+
+
+
+```{r, include=FALSE}
+LumosUnder <- read.csv("Lumos MS3 - NNNS - Strict - Underlabel- PSM.csv")
+dim(LumosUnder)
+```
+
+No TMT intensities were used in this running, so there no filtering on abundance
+
+Count the number of Lysine in sequence and in modification columne
+```{r, include=FALSE}
+# Lysine count in Sequence
+pepseqK <- str_count(LumosUnder$Annotated.Sequence, "k")
+length(pepseqK)
+sum(pepseqK)
+
+# Lysine count in Modifications
+pepmodK <- str_count(LumosUnder$Modifications, "K")
+length(pepmodK)
+sum(pepmodK)
+```
+
+Count the delta between number of lysine in the sequence and number of labelled lysine
+```{r, include=FALSE}
+# Difference in Lysine count between Sequence and Modifications
+delta <- pepseqK - pepmodK
+sum(delta)
+```
+
+#No Label
+Count the number of none-label at both lysine and N-term
+```{r, include=FALSE}
+###FFF
+nolabel <- sum(!str_count(LumosUnder$Modifications, ""))
+```
+
+
+#Partial Label
+
+Count the peptide that have 2 lysine but only labeled one lysine and N-term
+```{r}
+##CCC 
+#2 lysine but label only one lysine with N-term
+which(delta == 1)
+pep21KwN <-length(which(delta == 1))
+```
+
+Check the peptide with 2 labeled lysines side.
+
+```{r, include=FALSE}
+LumosUnder[8158, c(5:6)]
+LumosUnder[8572, c(5:6)]
+
+#Check No 2 lysine without N
+#No 3 lysine
+which(delta == 2)
+```
+
+There is no 2-lysine peptide that label at only one lysine (not labeled at N-term)
+
+Count the number of peptide contain 1 lysine that were labeled at lysine but not in N-term
+```{r, include=FALSE}
+###DDD 
+#Find seq with 1 lysine but not N-term
+pep1KwtN <- which(pepseqK == 1)
+pep1KwtN <- as.numeric(pep1KwtN)
+pep1KwtN <- LumosUnder[pep1KwtN,]
+#Remove N-term contained
+pep1KwtN <- nrow(pep1KwtN) - sum(str_count(pep1KwtN$Modifications, "N"))
+```
+
+Count the number of peptide contain 2 lysine that were labeled at 2 lysine but not in N-term
+```{r, include=FALSE}
+###EEE 
+#Find seq with 2 lysine but not N-term
+pep2KwtN <- which(pepseqK == 2)
+length(pep2KwtN)
+class(pep2KwtN)
+pep2KwtN <- as.numeric(pep2KwtN)
+length(pep2KwtN)
+pep2KwtN <- LumosUnder[pep2KwtN,]
+dim(pep2KwtN)
+#Remove N-term contained
+pep2KwtN <- nrow(pep2KwtN) - sum(str_count(pep2KwtN$Modifications, "N"))
+```
+
+
+
+Count the number of peptide contain lysine that were labeled at only label at N-term, not only label lysine
+```{r, include=FALSE}
+###KKK
+#Contain Lysine but only label lysine, only label at N-term
+pepnoKwN <- (which(pepseqK>0 & pepseqK<2))
+tail(pepnoKwN)
+pepnoKwN <- as.numeric(pepnoKwN)
+pepnoKwN <- LumosUnder[pepnoKwN, ]
+
+pepnoKwN <- nrow(pepnoKwN) - sum(str_count(pepnoKwN$Modifications, "K"))
+```
+
+#Fully
+Count the number of peptide contain 1 lysine that were labeled at both lysine side and N-term
+```{r, include=FALSE}
+##AAA
+#One Lysine One N-term
+#Find peptide with 1 lysine and N-term
+pep1KwN <- (which(pepmodK>0 & pepmodK<2))
+pep1KwN <- as.numeric(pep1KwN)
+pep1KwN <- LumosUnder[pep1KwN, ]
+
+
+pep1KwN <- sum(str_count(pep1KwN$Modifications, "N"))
+```
+
+Count the number of peptide contain 2 lysine that were labeled at both 2 lysine sides and N-term
+
+```{r, include=FALSE}
+#BBB
+#Find peptide with 1 lysine and N-term
+pep2KwN <- which(pepmodK>1)
+pep2KwN <- as.numeric(pep2KwN)
+pep2KwN <- LumosUnder[pep2KwN, ]
+
+pep2KwN <- sum(str_count(pep2KwN$Modifications, "N"))
+```
+
+Count the number of peptide contain do not contain N-term and  were labeled at N-term (The remaining)
+
+
+```{r, include=FALSE}
+###N-term only
+#Number of N-term all
+containRN <- str_count(LumosUnder$Modifications, "N")
+containRN <- sum(containRN>0)
+containRN <- containRN - pep1KwN - pep2KwN - pepnoKwN - pep21KwN
+```
+
+Re-check
+```{r, include=FALSE}
+nrow(LumosUnder) - (containRN + pep1KwN +pep2KwN + pepnoKwN + pep1KwtN +pep2KwtN + pep21KwN +  nolabel)
+
+```
+
+Across the 8668 tested peptides, 99.64% of PSMs corresponded to peptides that were fully labeled, while the percentage of partially labeled and nonlabelled are 0.21% and 0.15%, respectively (Fig. 7). Despite high percent of fully labeled peptides, this result is relevant to Zecha’s study on TMT labeling efficiency for underlabeling analysis, which also results in at least 98.7% of PSMs corresponded to fully labeled peptides3. 
+
+
+Plot
+```{r, include=FALSE}
+full <- containRN + pep1KwN +pep2KwN
+part <- pepnoKwN + pep1KwtN +pep2KwtN + pep21KwN
+non <- nolabel
+All <- containRN + pep1KwN +pep2KwN + pepnoKwN + pep1KwtN +pep2KwtN + pep21KwN +  nolabel
+
+TMTlabel <- data.frame(UnderLabeled = c("Fully Labeled", "Partially Labeled", "Not Labeled"),
+                       Label=c("Full", "Part", "None"),
+                       Percent = c(round(100*full/All, 2),
+                                   round(100*part/All, 2),
+                                   round(100*non/All, 2)))
+                                   
+```
+
+
+```{r, include=TRUE}
+ggplot(TMTlabel, aes(x=Label, y=Percent, fill=UnderLabeled)) + 
+  geom_bar(stat="identity", position="identity") +  
+  geom_text(aes(label = paste(Percent, "%"),
+                vjust = ifelse(Percent >= 0, 0, 1)))+ theme_classic()
+```
+
+Despite the high value of fully labeled peptides, high variance in the above analyses compared to the original analysis indicates that different parameter settings may lead to various results. However, in general, high per cent of fully labeled for identified peptides can be obtained, and the TKO standard can be used as a sufficient TMT labelling standard.
+
+
+##Overlabeling
+For overlabeling assessment, TMT10 was specified as a static label on N-termini and variable modifications were set on either histidine, serine, or threonine. Tyrosine cannot be set in P.D2.5, so tyrosine will not be the assessed in this re-analysis. For all searches, carbamidomethylated cysteine was set as a static modification and oxidation of methionine and N-terminal protein acetylation as dynamic modifications.
+
+Load file
+```{r, include=TRUE}
+LumosOver <- read.csv("Lumos MS3 - NNNS - Strict - Overlabel - PSM.csv")
+dim(LumosOver)
+```
+Data cleaning on Modification: remove N-termini,carbamidomethylated cysteine, and oxidation of methionine as they are not main of interest in this analysis.
+```{r, include=FALSE}
+LumosOver$Modifications <- str_replace_all(LumosOver$Modifications, "\\s*\\([^\\)]+\\)", "")
+LumosOver$Modifications <- gsub('N-Term', '', LumosOver$Modifications)
+LumosOver$Modifications <- gsub(';', '', LumosOver$Modifications)
+LumosOver$Modifications <- gsub('C..', '', LumosOver$Modifications)
+LumosOver$Modifications <- gsub('C.', '', LumosOver$Modifications)
+LumosOver$Modifications <- gsub('M..', '', LumosOver$Modifications)
+LumosOver$Modifications <- gsub('M.', '', LumosOver$Modifications)
+LumosOver$Modifications <- gsub(' ', '', LumosOver$Modifications)
+```
+
+Count the number of TMT-label on spectific amino acid (histidine, serine, or threonine) of peptide
+```{r, include=TRUE}
+#TMT-labeled at Histidine
+labelH <- str_count(LumosOver$Modifications, "H")
+labelH <- which(labelH > 0)
+length(labelH)
+
+#TMT-labeled at Threonine
+labelT <- str_count(LumosOver$Modifications, "T")
+labelT <- which(labelT > 0)
+length(labelT)
+#TMT-labeled at Serine
+labelS <- str_count(LumosOver$Modifications, "S")
+labelS <- which(labelS > 0)
+length(labelS)
+#PD2.5 does not have the tyrosine selecting
+labelY <- str_count(LumosOver$Modifications, "Y")
+labelY <- which(labelY > 0)
+length(labelY)
+#TMT-labeled at T-termini only (as N-termini labelling is set as static modification)
+nolabelSTY <- length(which(LumosOver$Modifications == ""))
+total <- nrow(LumosOver)
+```
+
+```{r, include=FALSE}
+#Percantage of Threonine
+length(labelT)/total
+#Percantage of Serine
+length(labelS)/total
+```
+Count the number of each TMT-label of overlabeling peptides
+```{r, include=FALSE}
+
+#Count overlapped labeling between Threonine and Histidine
+commonTH <- intersect(labelT, labelH) 
+TwH <- nrow(LumosOver[commonTH,])
+#Count overlapped labeling between Serine and Histidine
+commonSH <- intersect(labelS, labelH)  
+SwH <- nrow(LumosOver[commonSH,] )
+#Count overlapped labeling between Threonine and Serine
+commonTS <- intersect(labelT, labelS)  
+LumosOver[commonTS, ]
+#No aminoi acid was labeled with Histone and both Threonine Serine
+
+#Count the TMT-labeled peptide with Serine, Threonine or both
+totalTS <- length(labelT) + length(labelS) - length(commonTS)
+```
+
+Creating plot
+
+```{r, include=TRUE}
+STA <- data.frame(c((length(labelT-TwH))*100/total,TwH*100/total), c((length(labelS)-SwH)*100/total, SwH*100/total), c(totalTS*100/total,0))
+STA <- as.matrix(STA)
+colnames(STA) <- c('Threonine', 'Serine', 'Total')
+class(STA)
+
+
+barplot(STA,
+        main = "Overlabeled Peptides",
+        xlab = "Peptide",
+        ylab = "PSM [%]",
+        col=brewer.pal(n = 3, name = "Set2"),
+        ylim = c(0,35)
+)
+```
+This setting results in 4958 detected peptides, of which 3162 peptides were identified with N-termini labeling. The overlabeling analysis revealed that 32.65% of identified peptides (n = 1619) were labeled with at least one TMT-labeled serine or threonine residue. In particular, 14.27% of identified peptides were labeled with threonine (708 peptides) and 18.58% of identified peptides were labeled with serine (921 peptides). 210 peptides were labeled at histidine position, which was accounted for 4.24%.
+```{r, include=TRUE}
+### Percentage of TMT-labeled-Histione Of overlabeled PSMs
+#overlabeled PSMs at Threonine
+format(round(100*TwH/length(labelT), 2), nsmall = 2)
+#overlabeled PSMs at Serine
+format(round(100*SwH/length(labelS), 2), nsmall = 2)
+
+```
+ Of overlabeled PSMs, 3.14% of TMT-labeled-serine PSMs contained a histidine residue (4 in 708) and 0.56% of TMT-labeled-threonine PSMs contained a histidine residue (29 in 921) (Fig. 9).
+
+
+# Running Raw files with and without MBR in MaxQuant 
+
+For iMBR evaluation, three rawfile L00760, L00762, L00764 were used and set as fraction 1,2,3 in MaxQuant.
+The only difference between with and without iMBR setting was that with iMBR, I choosed the Match-Between-Run function in MaxQuant.
+
+```{r, include=FALSE}
+#input
+MS3 <- read.csv("MS3MQ without MBR.csv")
+MS3MBR <- read.csv("MS3MQ with MBR.csv")
+```
+
+
+```{r, include=FALSE}
+MQL00760 <- MS3[MS3$Raw.file=="L00760", ]
+MQL00760MBR <- MS3MBR[MS3MBR$Raw.file=="L00760", ]
+
+MQL00762 <- MS3[MS3$Raw.file=="L00762", ]
+MQL00762MBR <- MS3MBR[MS3MBR$Raw.file=="L00762", ]
+
+MQL00764 <- MS3[MS3$Raw.file=="L00764", ]
+MQL00764MBR <- MS3MBR[MS3MBR$Raw.file=="L00764", ]
+```
+
+__Plotting overlapped peptide between with and without iMBR for each raw files:__
+```{r}
+L60 <- venndetail(list(L00760 = MQL00760$Modified.sequence, L00760withMBR = MQL00760MBR$Modified.sequence))
+plot(L60)
+```
+
+```{r}
+L62 <- venndetail(list(L00762 = MQL00762$Modified.sequence, L00762withMBR = MQL00762MBR$Modified.sequence))
+plot(L62)
+```
+
+```{r}
+L64 <- venndetail(list(L00764 = MQL00764$Modified.sequence, L00764withMBR = MQL00764MBR$Modified.sequence))
+plot(L64)
+```
+
+__Plotting overlapped proteins between with and without iMBR__
+```{r}
+MQL00760$Leading.proteins <- sub(';.*','',MQL00760$Leading.proteins)
+MQL00760MBR$Leading.proteins <- sub(';.*','',MQL00760MBR$Leading.proteins)
+L61 <- venndetail(list(L00760 = MQL00760$Leading.proteins, L00760withMBR = MQL00760MBR$Leading.proteins))
+plot(L61)
+```
+
+```{r}
+MQL00762$Leading.proteins <- sub(';.*','',MQL00762$Leading.proteins)
+MQL00762MBR$Leading.proteins <- sub(';.*','',MQL00762MBR$Leading.proteins)
+L63 <- venndetail(list(L00762 = MQL00762$Leading.proteins, L00762withMBR = MQL00762MBR$Leading.proteins))
+plot(L63)
+```
+
+```{r}
+MQL00764$Leading.proteins <- sub(';.*','',MQL00764$Leading.proteins)
+MQL00764MBR$Leading.proteins <- sub(';.*','',MQL00764MBR$Leading.proteins)
+L65 <- venndetail(list(L00764 = MQL00764$Leading.proteins, L00764withMBR = MQL00764MBR$Leading.proteins))
+plot(L65)
+```

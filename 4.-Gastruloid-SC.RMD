@@ -1,0 +1,695 @@
+---
+title: "4. Gastruloid Single cells"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+```{r include=FALSE}
+packages <- c(
+  ##Data manipulation and analytics
+  "magrittr","dplyr","knitr","tidyverse","scales",
+  "scp","scater","scran","sva","SC3",
+  #Visualization
+  "RColorBrewer","dendsort","cowplot", "ggplot2","ComplexHeatmap","circlize")
+  
+lapply(packages, require, character.only = TRUE)
+```
+
+# I. DATA PROCESSING  
+
+## Input  
+
+Process MQ files from a MQ run
+
+Input four rawdata files in a MaxQuant Run:
+```{r}
+#Process MQ files from a MQ run
+gas.SC <- read.delim("Gas.SCData/4&5. evidence - Single Cells - LMNOIJK.txt")
+#Design of the experiment
+expdeg <- "Single Cell"
+```
+
+Data cleaning:
+Keep only one identifier that have the best scoring protein.
+```{r}
+#Remove >2nd leading proteins
+gas.SC$Leading.razor.protein <- sub(';.*','',gas.SC$Leading.razor.protein)
+#Remove >2nd leading genes
+gas.SC$Gene.names <- sub(';.*','',gas.SC$Gene.names)
+```
+
+Annotation table: this table was created manually based on experimental design. 
+```{r}
+sampleAnnotation <- read.csv("Gas.SCData/4&5. sampleAnnotation - Gas_SC_LMNOJJK.csv")
+```
+
+```{r message=FALSE, include = FALSE}
+#Create colour set:
+#For heatmap
+colour.hm <-  c(brewer.pal(9,'Blues')[9:3],brewer.pal(9,'Reds')[3:9])
+#For Channels
+colour.Chan <- c("dodgerblue","#E03E3E","#53BB79","#EF8228","#937264","#3043A2","#C25D7B")
+#For Datasets
+colour.SC <- c("#776AD6","#A068B0","#E487B8",
+               "#BBC385","#7FAD81","#0F7B6C","#0D5B11")
+```
+
+## I.1. PSM level  
+
+### 1. Reconstructing the dataset to create SCP/QFeatures object  
+
+In this study, all the experiments were labelled with TMT16-plex. The data are processed with `SCP` package.
+
+```{r message=FALSE}
+scp <- readSCP(featureData = gas.SC,
+               colData = sampleAnnotation,
+               channelCol = "Channel",
+               batchCol = "Experiment")
+```
+
+```{r include = FALSE}
+#Number of assays
+l <- length(scp)
+```
+
+There are `r l` assays in this analysis. 
+
+### 2. Quality control at PSM level  
+
+#### 2.1. Cleaning missing data  
+
+The zeros can be biological zeros or technical zeros. Therefore, any zero should be replaced by NA to avoid artefacts in downstream analysis.
+
+```{r}
+scp <- zeroIsNA(scp, i = names(scp))
+```
+  
+#### 2.2. Filter out failed runs based on PSM content (detected features)  
+
+If a dataset contained less than a specific number of features, something wrong was expected to be happened. Therefore, only the assays with sufficient PSMs were kept (e.g. > 500 PSMs)
+
+```{r include=FALSE}
+nPSM <- dims(scp)[1, ]
+#Create data frame
+nPSM <- data.frame(Datasets = names(nPSM),
+                       Count = nPSM)
+nPSM$Datasets <- factor(nPSM$Datasets, levels = nPSM$Datasets)
+
+#Plot
+nPSMplot <- ggplot(data=nPSM, aes(x=Datasets, y=Count, fill=Datasets)) +
+  scale_fill_manual(values= colour.SC, 
+                    labels= nPSM$Datasets) +
+  geom_bar(stat="identity")+
+  geom_text(aes(label=Count), position=position_dodge(width=0.9), vjust=-0.25)+
+  ylim(0,6000)+
+  xlab("Datasets") + 
+  ylab("Number of detected PSM") + 
+  theme_minimal()+
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.x =  element_blank())
+```
+
+Numbers of detected PSMs of n = 7 biological and technical replicates varied between 325 and 1604 PSMs 
+
+```{r echo=FALSE, fig.cap="Figure 1. Number of detected PSMs per dataset"}
+nPSMplot
+```
+
+In this experiment, the number of PSMs in sc_L and sc_M assays were not sufficient for further analysis and were removed. 
+
+```{r include=FALSE}
+#Select the assays that have ️sufficient PSMs (the number of rows is greater than 500),
+keepAssay <- dims(scp)[1, ] > 500
+scp <- scp[, , keepAssay]
+```
+  
+#### 2.3. Filter PSMs for contaminants and noisy spectra  
+
+The PSMs matched with the decoy database (Reverse = "+"), contaminant (Potential.contaminant = "+") and PIF < 0.8 were filtered out.  
+Filtering features based on feature metadata  
+- Remove PSMs that were matched to contaminants  
+- Remove PSMs that were matched to the decoy database (reverse)  
+- Keep PSMs that exhibited a high PIF (parental ion fraction), indicative of the purity of a spectrum  
+
+```{r}
+scp <- filterFeatures(scp,
+                      ~ Reverse != "+" &
+                        Potential.contaminant != "+" &
+                        !is.na(PIF) & PIF > 0.8)
+```
+
+#### 2.4. Filter features to control for high false discovery rate FDR  
+
+
+The q-values were computed based on posterior error probabilities (PEP) from MaxQuant across assays. Only those proteins with q-values < 0.01 (1%) were kept.
+
+```{r }
+scp <- pep2qvalue(scp,
+                  i = names(scp),
+                  PEP = "PEP",
+                  rowDataName = "qvalue_PSMs")
+```
+```{r}
+#or compute q-values at peptide or protein level rather than PSM
+scp <- pep2qvalue(scp,
+                  i = names(scp),
+                  PEP = "PEP",
+                  groupBy = "Leading.proteins",
+                  rowDataName = "qvalue_proteins")
+```
+
+```{r include=FALSE}
+#Plot 
+qvalueplot <- rowDataToDF(scp,
+            i = names(scp),
+            vars = c("qvalue_PSMs", "qvalue_proteins")) %>%
+  data.frame %>%
+  pivot_longer(cols = c("qvalue_PSMs", "qvalue_proteins"),
+               names_to = "measure") %>%
+  ggplot(aes(x = value)) +
+  geom_histogram() +
+  geom_vline(xintercept = 0.01) +
+  scale_x_log10() +
+  facet_grid(rows = vars(measure)) +
+  theme_bw()
+```
+
+```{r, echo = FALSE, fig.width=7.2, fig.height=4.45, fig.cap="Figure 2. q-value plot for checking PEP."}
+qvalueplot
+```
+
+Filtering out those protein with FDR at 1%.
+
+```{r}
+scp <- filterFeatures(scp,
+                      ~ qvalue_proteins < 0.01)
+```
+
+### 3. Filter out PSMs with high sample to carrier ratio (for single-cell)  
+
+Specifically, carrier channels (~100 cells) and reference channels (~5 cells) composed of reference samples from four sorted cell populations were introduced for enhancing quality control and ion counting statistics.  
+In particular, reporter ion intensities belonging to single-cell channels were controlled by the carrier channel and normalized by the reference channel. 
+
+```{r}
+scp <- computeSCR(scp, 
+                  i = names(scp),
+                  colDataCol = "Population",
+                  carrierPattern = "Carrier",
+                  samplePattern = "Mt1-BFP+|Sox17-RFP+|Bra-GFP+|Triple-Neg",
+                  rowDataName = "MeanSCR")
+```
+
+
+```{r include=FALSE}
+#Mean for MeanSCR
+MeanSCR.df <- scp %>%  rowDataToDF(i = names(scp), 
+                                 vars = "MeanSCR") %>%
+  data.frame 
+```
+
+```{r include=FALSE}
+#Plot
+SCRplot <- ggplot(MeanSCR.df, aes(x = MeanSCR)) +
+  geom_histogram(binwidth=0.015) +
+  geom_vline(xintercept = c(1/100, median(MeanSCR.df$MeanSCR, na.rm = TRUE), 0.1),
+             lty = c(2, 2, 1),
+             linetype='dashed', 
+             col = c('red', 'blue','black')) +
+  scale_x_log10()+
+  xlab("Mean Single cells to Carrier ratio")+
+  ylab("Count")+
+  theme_bw()
+```
+
+
+```{r echo = FALSE, fig.width=7.2, fig.height=4.45, fig.cap="Figure 3. Distributions of mean single cells to carrier ratios (the red dashed line representing ratio of 1/100, the blue dashed line representing median of mean single cells to carrier ratios)."}
+SCRplot
+```
+
+Since 100 cells were sorted for carrier channels, the expected ratio between carrier intensities and single-cell intensities should be approximately 100-fold. In this study, the distribution of mean single cells to carrier ratio was centered around 0.02. This shift from expected 0.01, indicating that PSMs intensities were not quantified precisely by MS instrument. Commonly, the window of isolation does not match exactly the spectrum, leading to precursor interference and resulting in ratio compression. Ratios that were higher than 0.1 showed major errors and were filtered out. 
+
+```{r}
+scp <- filterFeatures(scp,
+                      ~ !is.na(MeanSCR) & MeanSCR < 0.1)
+```
+
+
+Reference channel (~5 cells) was included in each run to reduce the between-run variation and improve data integration since the relative RI intensities of all channels, including single-cell channels, will be divided by the reference channel.
+
+```{r}
+scp <- divideByReference(scp,
+                         i = names(scp),
+                         colDataCol = "Population",
+                         samplePattern = ".",
+                         refPattern = "Reference")
+```
+
+
+
+#### Number channels per pell population after data processing 
+
+```{r echo=FALSE}
+poputable <- t(as.data.frame(table(colData(scp)[, "Population"])))
+colnames(poputable) <- poputable[1,]
+poputable <- poputable[-1, ]
+poputable <- t(as.data.frame(poputable))
+rownames(poputable) <- c("Channels")
+knitr::kable(poputable)
+```
+
+
+## I.2. Peptide level  
+
+
+### 4. Aggregate PSM data to peptide data  
+
+Aggregate PSM data to peptide data. Several PSMs were aggregated into a unique peptide.
+Following the `scp`, PSM data were aggregated using the median value per sample by performing `matrixStats:colMedians` function.
+
+```{r include=FALSE}
+pepAssays <- paste0("Peptides_", names(scp))
+```
+
+```{r message=FALSE}
+scp <- aggregateFeaturesOverAssays(scp,
+                                   i = names(scp),
+                                   fcol = "Sequence",
+                                   name = pepAssays,
+                                   fun = matrixStats::colMedians, na.rm = TRUE)
+```
+
+### 5. Join all datasets into one assay  
+
+Up to now, all the data belonging to each MS run were separated into different assays. In this step, all datasets from different batches were combined into a single assay using
+`joinAssays` function. 
+
+```{r}
+scp <- joinAssays(scp,
+                  i = pepAssays,
+                  name = "Peptides")
+```
+
+### 6. Quality control  
+
+#### 6.1. Median Relative Reporter Intensity  
+
+We computed the median relative reporter ion intensity for each cell separately and applied a filter based on this statistic. This procedure recalls that of library size filtering commonly performed in scRNA-Seq data analysis, where the library size is the sum of the counts in each single cell. Median intensity will be stored in the `colData`. 
+
+
+```{r include=FALSE}
+MedianRI <- apply(assay(scp,"Peptides"),
+                  MARGIN = 2, 
+                  FUN = median, 
+                  na.rm = TRUE)
+#Median Relative Reporter Intensity will be stored in the colData. 
+colData(scp)[names(MedianRI), "MedianRI"] <- MedianRI
+```
+
+The median RI values for reference channels will be equal to the value of 1, while median RI intensities for carrier channels (100 cells) should be higher than 1, and median RI intensities for single-cell channels should be lower than 1. This expectation was observed in this experiment.
+
+```{r include=FALSE}
+#Make Population as factor for plotting
+scp$Population <- factor(scp$Population,
+                         levels = c("Mt1-BFP+","Sox17-RFP+","Bra-GFP+","Triple-Neg",
+                                    "Empty","Reference","Carrier"))
+
+#Plot
+MedianRIplot <- scp %>% colData %>% data.frame %>%
+  ggplot(aes(x = Population, y = MedianRI, fill = Population)) +
+  #geom_boxplot(width=0.5) +
+  geom_violin(adjust=0.75) + geom_boxplot(width=.025) +
+  stat_summary(fun=mean, geom="point", fill="#D92721", shape=21, size=1)+
+  scale_fill_manual(values = colour.Chan)+
+  geom_jitter(aes(colour = Dataset),
+              alpha = 0.9, shape=16, size = 2,
+              position = position_jitter(width = 0.15, height = 0.001))+
+  scale_colour_manual(values = colour.SC) +
+  #scale_y_log10()+
+  scale_y_log10(breaks = trans_breaks("log10", function(x) {10^x}),
+                labels = trans_format("log10", math_format(10^.x)),
+                limit = c(10^-2, 10^2))+
+  #geom_hline(yintercept = ts, linetype='dashed', col = 'red') +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(),
+        axis.title.x = element_blank())+
+  ggtitle(paste0(expdeg," - MedianRI of Peptide Intensity"))
+
+
+```
+
+
+```{r, echo = FALSE, fig.width=7.2, fig.height=4.45, fig.cap="Figure 4. Violin plot showing the distributions of median reporter ion intensities for each cell population."}
+MedianRIplot
+```
+
+
+Effect of channel 126 on channel 127C was previously described as “leakiness” because 127C is the primary (+1 Da) reporter ion interference of 126 channels, but not other remaining channels. For single-cell design, this “leakiness” phenomenon from carrier channel into single-cell channels possibly causes spurious RI intensities for single-cell signals. To prevent this phenomenon on single-cell channels, the carrier channels containing 100 cells were set in channel 126, and empty channels (no cell) were set in channel 127C. It is expected that the carrier channel will produce signals “spilling over” into empty channels; the amount of signals can be up to 8% depending on TMT lot39. In our study, analysis of reporter ion intensities showed that empty channels contained a higher median RI compared to those of single-cell channels, indicating the possibility of “leakiness” effect.
+
+#### 6.2. Median Coefficient of Variation  
+
+The coefficients of variation (CV), or standard deviation/mean, are computed on all peptides stemming from the same protein; thus, the CV reveals the consistency of protein quantification for all experimental samples. In particular, within a sample, the quantity of all digested peptides originating from the same protein should correlate with the quantity of that protein. Nonetheless, since empty channels contained no cells, their signals (RI intensities) of digested peptides did not originate from an actual protein. Thus, CV values from empty channels should be highly variable and can be used for evaluating background noise and co-isolation issue. Channels containing cells should have lower quantification variability than empty channels. High median CVs from channels containing cells that did not pass the cutoff value (based on empty channels) were removed. 
+
+In this analysis: `SCoPE2` normalization was used. `SCoPE2` performs a custom normalization (norm = "SCoPE2"). Each row in an assay is normalized by a scaling factor. This scaling factor is the row mean after dividing the columns by the median. The authors retained CVs that are computed using at least 3 peptides (`nobs = 3`). 
+  
+There are some options for normalization: `"sum"`, `"max"`, `"center.mean"`, `"center.median"`, `"div.mean"`, `"div.median"`, `"diff.meda"`, `"quantiles"`, `"quantiles.robust"`,`"vsn"`. 
+
+```{r, message=FALSE}
+scp <- medianCVperCell(scp,
+                       i = pepAssays, #or (l+1):(l*2)
+                       groupBy = "Leading.razor.protein",
+                       nobs = 3, 
+                       norm = "SCoPE2",
+                       colDataName = "MedianCV")
+```
+
+```{r include=FALSE, message=FALSE}
+
+#Threshold for minimum of MedianCV for Empty Channel
+ts <- 0.4
+
+#Plot
+MedianCVplot <- scp %>% getWithColData("Peptides") %>% colData %>% data.frame %>%
+  ggplot(aes(x = Population, y = MedianCV, fill = Population)) +
+  geom_boxplot(width=0.4,outlier.shape = NA) +
+  stat_summary(fun=mean, geom="point", fill="#D92721", shape=21, size=1)+
+  scale_fill_manual(values = colour.Chan) +
+  geom_jitter(aes(colour = Dataset),
+              alpha = 0.9, shape=16, size = 2,
+              position = position_jitter(width = 0.15, height = 0.001))+
+  scale_colour_manual(values = colour.SC)+
+  ylim(0,1) +
+  geom_hline(yintercept = ts, linetype='dashed', col = 'red') +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(),
+        axis.title.x = element_blank())+
+  ggtitle(paste0(expdeg," - MedianCV of Peptide Intensity"))
+```
+
+Similar to 100-cell experiments, the coefficients of variation (CVs) were also computed to evaluate the consistency of protein quantification for all experimental samples. Those channels containing cells, including single-cell channels, showed a smaller median CV compared to the empty channel, indicating that single cells produced lower quantification variability than the empty wells. The intensity values from empty channels, reference channels, carrier channels, and those single-cell channels with high median CV than empty channels were removed. Further analyses were based on those single-cell channels showing lower median CV than empty channels.
+
+```{r, echo = FALSE, message=FALSE, fig.width=7.2, fig.height=4.45, fig.cap="Figure 5. Bot plot showing the distributions of median coefficients of variation computed based on peptides originating from the same protein."}
+MedianCVplot
+```
+
+
+####  6.3. Filter based on the MedianRI and MedianCV  
+
+Filtering out based on the `MedianCV` and `MedianRI`
+
+Based on the distribution of the Empty, we can decides which MedianCV threshold (`ts` in this study) and remove channels/cells that exhibit higher MedianCV than the Empty channels. 
+
+```{r}
+scp <- scp[, !is.na(scp$MedianCV) & scp$MedianCV < ts, ]
+```
+```{r}
+scp <- scp[, scp$Population %in% c("Mt1-BFP+","Sox17-RFP+","Bra-GFP+","Triple-Neg")]
+```
+
+Figure 6 shows the MedianRI and MedianCV of channels containing reporter cells after being filtered out the MedianRI and MedianCV metrics. 
+
+```{r include=FALSE, message=FALSE}
+#Plot after filtering
+
+#MedianRI
+MedianRIplotQC <- scp %>% colData %>% data.frame %>%
+  ggplot(aes(x = Population, y = MedianRI, fill = Population)) +
+  #geom_boxplot(width=0.5) +
+  geom_violin(adjust=0.75) + geom_boxplot(width=.025) +
+  stat_summary(fun=mean, geom="point", fill="#D92721", shape=21, size=1)+
+  scale_fill_manual(values = colour.Chan) +
+  geom_jitter(aes(colour = Dataset),
+              alpha = 0.9, shape=16, size = 2,
+              position = position_jitter(width = 0.15, height = 0.001))+
+  scale_colour_manual(values = colour.SC) +
+  scale_y_log10(breaks = trans_breaks("log10", function(x) {10^x}),
+                labels = trans_format("log10", math_format(10^.x)),
+                limit = c(10^-2, 10^2))+
+  #geom_hline(yintercept = ts, linetype='dashed', col = 'red') +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(),
+        axis.title.x = element_blank())+
+  ggtitle(paste0(expdeg," - MedianRI of Peptide Intensity after QC"))
+
+
+MedianCVplotQC <- scp %>% getWithColData("Peptides") %>% colData %>% data.frame %>%
+  ggplot(aes(x = Population, y = MedianCV, fill = Population)) +
+  geom_boxplot(width=0.4) +
+  stat_summary(fun=mean, geom="point", fill="#D92721", shape=21, size=1)+
+  scale_fill_manual(values = colour.Chan) +
+  geom_jitter(aes(colour = Dataset),
+              alpha = 0.9, shape=16, size = 2,
+              position = position_jitter(width = 0.15, height = 0.001))+
+  scale_colour_manual(values = colour.SC)+
+  ylim(0,1) +
+  geom_hline(yintercept = 0.4, linetype='dashed', col = 'red') +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(),
+        axis.title.x = element_blank())+
+  ggtitle(paste0(expdeg," - MedianCV of Peptide Intensity after QC"))
+```
+
+```{r, echo = FALSE, out.width=c('50%', '50%'), fig.show='hold', fig.cap="Figure 6. Violin plot and Bot plot showing the distributions of medianRI and medianCV after quality control."}
+MedianRIplotQC
+MedianCVplotQC
+```
+
+
+After filtering, there were `r length(colData(scp)[, "Population"])` remaining channels 
+
+```{r echo=FALSE}
+#Return Population to character (required for Batch correction)
+scp$Population <- as.character(scp$Population)
+#### Number channels per pell population  
+poputable <- t(as.data.frame(table(colData(scp)[, "Population"])))
+colnames(poputable) <- poputable[1,]
+poputable <- poputable[-1, ]
+poputable <- t(as.data.frame(poputable))
+rownames(poputable) <- c("Channels")
+knitr::kable(poputable)
+```
+
+Further processing the QC peptide data including: Normalization, Filter peptides based on missing data, Log-transformation  
+  
+### 7. Normalization  
+
+This normalization procedure is suggested in the SCoPE2 analysis. Normalization steps included:  
+- First, the columns (samples) of the peptide data were normalized by dividing the relative intensities by the median relative intensities.  
+- Then, the rows (peptides) were normalized by dividing the relative intensities by the mean relative intensities.  
+
+```{r}
+# Divide columns by median
+scp <- sweep(scp, 
+             i = "Peptides",
+             MARGIN = 2,
+             FUN = "/",
+             STATS = colMedians(assay(scp[["Peptides"]]), na.rm = TRUE),
+             name = "Peptides_norm_col")
+# Divide rows by mean
+scp <- sweep(scp,
+             i = "Peptides_norm_col",
+             MARGIN = 1,
+             FUN = "/",
+             STATS = rowMeans(assay(scp[["Peptides_norm_col"]]), na.rm = TRUE),
+             name = "Peptides_norm")
+```
+  
+### 8. Filter peptides based on missing data  
+  
+Peptides that contain many missing values are not informative and needed to be removed. 
+In this study, peptides with more than 99 % missing data were removed. 
+```{r, echo=TRUE}
+scp <- filterNA(scp,
+                i = "Peptides_norm",
+                pNA = 0.99)
+```
+  
+### 9. Log-transformation  
+  
+```{r}
+scp <- logTransform(scp,
+                    base = 2,
+                    i = "Peptides_norm",
+                    name = "Peptides_log")
+```
+
+  
+## I.3. Protein level  
+  
+Similarly to aggregating PSMs, peptide data were aggregated to protein data
+
+### 10. Aggregate peptide data to protein data  
+  
+```{r message=FALSE}
+scp <- aggregateFeatures(scp,
+                         i = "Peptides_log",
+                         name = "Proteins",
+                         fcol = "Leading.razor.protein",
+                         fun = matrixStats::colMedians, na.rm = TRUE)
+```
+
+The protein values were further processed in three steps: normalization, imputation and batch correction.
+
+### 11. Normalization  
+  
+Protein normalization was performed similarly to peptide normalization; however, as data were log-transformed at the peptide level, data were subtracted by the statistic (median or mean) instead of dividing.
+
+
+```{r}
+scp %>%
+  ## Center columns with median
+  sweep(i = "Proteins",
+        MARGIN = 2,
+        FUN = "-",
+        STATS = colMedians(assay(scp[["Proteins"]]),
+                           na.rm = TRUE),
+        name = "Proteins_norm_col") %>%
+  ## Center rows with mean
+  sweep(i = "Proteins_norm_col",
+        MARGIN = 1,
+        FUN = "-",
+        STATS = rowMeans(assay(.[["Proteins_norm_col"]]),
+                         na.rm = TRUE),
+        name = "Proteins_norm") ->
+  scp
+```
+
+### 12. Imputation (using the KNN algorithm)  
+  
+Before imputation, there percentage of missingness is `r round(scp[["Proteins_norm"]] %>% assay %>% is.na %>% mean*100,2)`%.
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+misval <- longFormat(scp[, , "Proteins_norm"]) %>%
+  data.frame %>%
+  group_by(colname) %>%
+  summarize(missingness = mean(is.na(value))) %>%
+  ggplot(aes(x = missingness)) +
+  geom_histogram() +
+  xlim(0, 1) +
+  theme_bw()
+```
+
+``` {r , echo=FALSE, fig.cap="Figure 7. Percentage of missingness."}
+misval
+```
+K nearest neighbors algorithm were used for imputation, with k = 4. 
+  
+```{r message=FALSE}
+scp <- impute(scp,
+              i = "Proteins_norm",
+              method = "knn",
+              k = 4, rowmax = 1, colmax= 1,
+              maxp = Inf, rng.seed = 1234)
+```
+
+### 13. Batch correction (using the ComBat algorithm)  
+  
+As variance was observed between batches, batch correction was performed to remove batch effect and to minimize variance between batches.
+```{r message=FALSE, warning=FALSE}
+sce <- getWithColData(scp, "Proteins_norm")
+batch <- colData(sce)$Raw.file
+model <- model.matrix(~ as.character(Population), data = colData(sce))
+
+assay(sce) <- ComBat(dat = assay(sce),
+                     batch = batch,
+                     mod = model)
+addAssay(scp,
+         y = sce,
+         name = "Proteins_batchC") %>%
+  addAssayLinkOneToOne(from = "Proteins_norm",
+                       to = "Proteins_batchC") ->
+  scp
+```
+
+### 14. Reconstructing the dataset for Downstream analysis
+  
+Taking out only the batch assay for further analysis.  
+  
+```{r, message=FALSE, warning=FALSE}
+#Picking only of Experiments/Assays of interest (Here: Batch correction assay)
+gas.DR <- getWithColData(scp, "Proteins_batchC")
+```
+```{r include=FALSE}
+#Add a scale-log assays for some heatmap/visualization
+assay(gas.DR,"scaleassay") <- t(scale(t(assay(gas.DR,"assay")), 
+                                      center = TRUE, scale = TRUE))
+```
+
+There were proteins that did not contain geneID, then they were needed to be added manually  
+
+```{r echo=FALSE}
+#Find proteins that have no correspoding gene
+blankgene <- gas.SC[match(rownames(gas.DR), gas.SC$Leading.razor.protein),][,c("Leading.razor.protein","Gene.names")]
+```
+
+Find proteins that have no corresponding gene
+```{r message=FALSE, eval=FALSE}
+blankgene[which(blankgene[,"Gene.names"] == ""),]
+```
+
+No blank gene
+```{r include=FALSE}
+#Change rownames gas.DR from proteins names to correspoding gene names
+rownames(gas.DR) <- gas.SC[match(rownames(gas.DR), gas.SC$Leading.razor.protein),]$Gene.names
+
+```
+  
+    
+# II. DIMENSIONALITY REDUCTION AND VISUALIZATION  
+
+A total of `r nrow(gas.DR)` proteins passed the filtering. 
+
+## 1. Principal component analysis  
+
+Principal component analysis (PCA) was computed using the top most highly variable expressed proteins since focusing on these proteins may reduce technical noise and emphasize biological signals (adapted from single-cell RNA-seq analysis). 
+
+In total, `r nrow(gas.DR)` detected proteins passed quality control. Batch correction was performed to minimize variance between batches. The top 100 most highly variable expressed proteins were selected for PCA analysis, which revealed no clear clustering among the four sorted cell populations. 
+
+```{r include=FALSE}
+#Change order for PCA plot
+colour.PCA <- c("#53BB79","dodgerblue","#E03E3E","#EF8228")
+```
+```{r}
+set.seed(100)
+PCAtop <- 100
+gas.DR <- runPCA(gas.DR,
+                 ncomponents = 10,
+                 ntop = PCAtop,
+                 scale = FALSE,
+                 exprs_values = "assay",
+                 name = "PCA")
+```
+
+```{r include=FALSE}
+PCAplot <- plotReducedDim(gas.DR,
+                          dimred = "PCA",
+                          colour_by = "Population",
+                          point_alpha = 0.8)+
+  ggplot2::scale_color_manual(values = colour.PCA)+
+  labs(colour = "Population")+
+  xlab(paste0("PC1 (", round(attr(reducedDim(gas.DR), "percentVar")[1],1), "%)"))+
+  ylab(paste0("PC2 (", round(attr(reducedDim(gas.DR), "percentVar")[2],1), "%)"))
+```
+
+```{r include=FALSE}
+#1.2. PCA Check Batch
+gas.DR$lcbatch <- as.factor(gas.DR$lcbatch ) 
+PCAplotbatch <- plotReducedDim(gas.DR,
+                          dimred = "PCA",
+                          colour_by = "lcbatch",
+                          point_alpha = 0.8)+
+  ggplot2::scale_color_manual(values = c("#D88C4C","#1498BE"))+
+  labs(colour = "Batch")+
+  xlab(paste0("PC1 (", round(attr(reducedDim(gas.DR), "percentVar")[1],1), "%)"))+
+  ylab(paste0("PC2 (", round(attr(reducedDim(gas.DR), "percentVar")[2],1), "%)"))
+```
+
+
+```{r, echo=FALSE, out.width=c('50%', '50%'), fig.width=3, fig.height=3, fig.cap="Figure 8. PCA plot of four sorted cell populations. PCA was computed from the top 100 most highly variable expressed proteins.", fig.show='hold'}
+PCAplotbatch
+PCAplot
+```
